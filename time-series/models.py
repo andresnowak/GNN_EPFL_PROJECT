@@ -3,6 +3,8 @@ from torch import nn
 import torch
 from torch_geometric_temporal.nn.recurrent import TGCN
 from torch_geometric.utils.sparse import dense_to_sparse
+from collections import deque
+
 
 class GraphStructureLearner(nn.Module):
     def __init__(
@@ -43,8 +45,6 @@ class DTGCN(nn.Module):
     def __init__(
         self,
         num_nodes: int,
-        node_input_feat_dim: int,  # Features per node at each time step
-        gsl_node_feat_dim: int,  # Features per node FOR THE GSL WINDOW
         gsl_embed_dim: int,
         tgcn_hidden_dim: int, # The H size
         window_size: int, # K window size
@@ -56,8 +56,6 @@ class DTGCN(nn.Module):
         super().__init__()
 
         self.num_nodes = num_nodes
-        self.node_input_feat_dim = node_input_feat_dim
-        self.gsl_node_feat_dim = gsl_node_feat_dim
         self.gsl_embed_dim = gsl_embed_dim
         self.window_size = window_size
         self.gsl_alpha = gsl_alpha
@@ -66,150 +64,162 @@ class DTGCN(nn.Module):
 
         gcn_in_channels = window_size + tgcn_hidden_dim
         self.graph_structure_learner = GraphStructureLearner(gcn_in_channels,gsl_embed_dim, device=device)
-        self.tgcn = TGCN(1, tgcn_hidden_dim).to(device) # accepts at forward always a different graph adjacency and list
+        self.tgcn = TGCN(window_size, tgcn_hidden_dim).to(device) # accepts at forward always a different graph adjacency and list
 
         self.classifier = nn.Linear(tgcn_hidden_dim * num_nodes, num_classes).to(device)
 
-    def _init_gsl_history(self, batch_size, device):
-        """Initializes the history state for Et averaging."""
-        N = self.num_nodes
-        return {
-            "E_history": torch.zeros(
-                batch_size, self.gsl_avg_steps, N, N, device=device
-            ),
-            "history_idx": torch.zeros(batch_size, dtype=torch.long, device=device),
-            "history_full": torch.zeros(batch_size, dtype=torch.bool, device=device),
-        }
-    
-    def _update_history_and_average(self, Et_batch, history_state):
-        """Updates history buffer with Et_batch and computes Mt_batch."""
-        batch_size = Et_batch.shape[0]
-        device = Et_batch.device
-        avg_steps = self.gsl_avg_steps
-
-        # Retrieve current history state
-        E_history = history_state['E_history']
-        history_idx = history_state['history_idx']
-        history_full = history_state['history_full']
-
-        mt_batch = torch.zeros_like(Et_batch) # To store results [B, N, N]
-        next_history_idx = torch.zeros_like(history_idx)
-        next_history_full = history_full.clone()
-
-        for i in range(batch_size):
-            current_idx_i = history_idx[i].item()
-            E_history[i, current_idx_i] = Et_batch[i] # Store current Et
-            next_idx_i = (current_idx_i + 1) % avg_steps
-            next_history_idx[i] = next_idx_i
-            if not next_history_full[i] and next_idx_i == 0:
-                next_history_full[i] = True
-            # Calculate average Mt for item i
-            if next_history_full[i]:
-                mt_batch[i] = torch.mean(E_history[i], dim=0)
-            else:
-                mt_batch[i] = torch.mean(E_history[i, :current_idx_i+1], dim=0)
-
-        new_history_state = {
-            'E_history': E_history,
-            'history_idx': next_history_idx.to(device),
-            'history_full': next_history_full.to(device)
-        }
-        return mt_batch, new_history_state
 
     def forward(self, x, static_edge_index, static_edge_weight=None):
         """
         Args:
-            x (Tensor): Input time series. Shape: [batch, num_nodes, time_steps]
+            x (Tensor): Input time series. Shape: [B, N, T] (Batch, Nodes, Time)
+                        Assumes node_input_feat_dim=1, so T is time steps.
+                        If node_input_feat_dim > 1, shape is [B, N, T, F_in]
             static_edge_index (LongTensor): Shared predefined graph connectivity. Shape: [2, E_static]
             static_edge_weight (Tensor, optional): Shared predefined graph weights. Shape: [E_static]
         Returns:
-            out (Tensor): Classification logits. Shape: [batch, num_classes]
+            out (Tensor): Classification logits. Shape: [B, num_classes]
         """
-        batch_size, N_main, time_steps = x.shape
+        if x.dim() == 3:  # Assume [B, N, T] -> [B, N, T, 1]
+            x = x.unsqueeze(-1)
+        batch_size, N, time_steps, F_in = x.shape
+        assert N == self.num_nodes
+        # assert F_in == self.node_input_feat_dim
         device = x.device
-        N_gsl = self.num_nodes
         H_dim = self.tgcn_hidden_dim
 
         # --- Initialize States ---
-        gsl_history_state = self._init_gsl_history(batch_size, device)
-        # TGCN hidden state shape usually [B*N, H]. Initialize correctly.
-        h_prev = torch.zeros(batch_size * self.num_nodes, H_dim, device=device)
+        # TGCN hidden state shape [B*N, H]. Initialize correctly.
+        h_prev_flat = torch.zeros(batch_size * N, H_dim, device=device)
 
-        # --- Temporal Processing ---
-        for t in range(time_steps):
-            # --- Prepare Inputs for GSL ---
-            # 1a. Get Window Vt -> features gsl_node_features [B, N, F_gsl]
-            start_idx = max(0, t - self.window_size + 1)
-            window = x[:, :, start_idx : t + 1]  # [B, win_len, N, F_in]
-            win_len_actual = window.shape[2]
-            # Assuming N_gsl == N_main
-            if N_main != N_gsl:
-                raise NotImplementedError("GSL nodes != main nodes")
-            # Prepare features [B, N, F_gsl=K] (assuming F_in=1)
-    
-            # gsl_node_features_padded = window.permute(0, 2, 1, 3)  # [B, N, W, 1]
-            if win_len_actual < self.window_size:
-                pad_shape = (
-                    batch_size,
-                    N_main,
-                    self.window_size - win_len_actual,
-                )
-                padding = torch.zeros(pad_shape, device=device)
-                window = torch.cat(
-                    [padding, window], dim=2
-                )
+        E_history_deque = deque(maxlen=self.gsl_avg_steps)
 
+        # --- Prepare input windows V_t ---
+        # Use unfold to create sliding windows V_t = {x_{t-K+1}, ..., x_t}
+        # Input x: [B, N, T, F_in]
+        # We need to window along the time dimension (dim=2)
+        # Permute to put Time dim first for unfold: [B, N, F_in, T]
+        x_permuted = x.permute(0, 1, 3, 2)  # [B, N, F_in, T]
+        # Unfold along the last dim (T): size=K, step=1 (for sliding window)
+        # Output shape: [B, N, F_in, num_windows, K] where num_windows = T - K + 1
+        v_t_unfolded = x_permuted.unfold(dimension=-1, size=self.window_size, step=1)
         
-            # Reshape based on definition F_gsl = K * F_in
-            gsl_node_features = window.reshape(
-                batch_size, N_main, -1
-            )  # [B, N, F_gsl]
+        print(v_t_unfolded.shape)
+        # Permute and reshape V_t to be [B, num_windows, N, K*F_in] for easier iteration
+        v_t = v_t_unfolded.permute(0, 3, 1, 4, 2).reshape(
+            batch_size, -1, N, self.window_size * F_in
+        )
+        num_windows = v_t.shape[1]
 
-            # 1b. Get Previous Hidden State Ht-1, reshape for concat: [B*N, H] -> [B, N, H]
-            h_prev_reshaped = h_prev.reshape(batch_size, N_main, H_dim)
+        # --- Temporal Loop ---
+        outputs = []
+        for t in range(num_windows):
+            # Get current window features V_t: [B, N, K*F_in]
+            v_t_step = v_t[:, t, :, :]
 
-            # 1c. Concatenate features It = Vt || Ht-1
-            It_batch = torch.cat(
-                [gsl_node_features, h_prev_reshaped], dim=2
-            )  # [B, N, F_gsl + H]
+            # Reshape previous hidden state for GSL input: [B*N, H] -> [B, N, H]
+            h_prev = h_prev_flat.view(batch_size, N, H_dim)
+
+            # Concatenate V_t and H_{t-1} to form I_t: [B, N, K*F_in + H]
+            I_t = torch.cat([v_t_step, h_prev], dim=-1)
 
 
-            # --- GSL Step ---
-            # 2. Get Instantaneous Graph Et_batch
-            Et_batch = self.graph_structure_learner(
-                It_batch, static_edge_index, static_edge_weight
-            )  # Shape: [B, N_gsl, N_gsl]
+            # --- Graph Structure Learning ---
+            # Using the simplified GSL that takes [B, N, F]
+            # Pass I_t [B, N, K*F_in + H]
+            Et = self.graph_structure_learner(
+                I_t, static_edge_index, static_edge_weight
+            )  # Output Et: [B, N, N]
 
-            # --- Averaging Step ---
-            # 3. Update History & Compute Average Mt_batch
-            Mt_batch, gsl_history_state = self._update_history_and_average(
-                Et_batch, gsl_history_state
-            )
-            # Shape: [B, N_gsl, N_gsl]
+            E_history_deque.append(Et)
 
-            # --- Prepare Inputs for TGCN ---
-            # 4. Convert Mt_batch to Sparse PyG format for TGCN
-            dynamic_edge_index, dynamic_edge_weight = dense_to_sparse(
-                Mt_batch
-            )
+            # --- Average Dynamic Graph ---
+            # Use the history buffer to compute Mt (averaged Et)
+            if len(E_history_deque) > 0:
+                # Shape becomes [current_deque_len, B, N, N]
+                relevant_Et_stack = torch.stack(list(E_history_deque), dim=0)
+                # Average along the time dimension (dim=0)
+                Mt_batch = torch.mean(relevant_Et_stack, dim=0)  # [B, N, N]
+            else:
+                # Should not happen if loop runs at least once and n>=1
+                # Handle gracefully just in case (e.g., use static graph or identity?)
+                # Using Et directly if history is empty (only first step if n=1)
+                Mt_batch = Et
 
-            # 5. Get Current Input x_t (Batched) -> [B*N, F_in]
-            # x_t shape: [B, N] (signal value at time t for each node)
-            x_t = x[:, :, t]
-            # Reshape x_t for TGCN: [B, N] -> [B*N, 1] (feature dim is 1)
-            x_t_flat = x_t.reshape(-1, 1)
+            # --- Convert Averaged Graph to Batched Sparse Format ---
+            batched_edge_index, batched_edge_weight = dense_to_sparse(Mt_batch)
 
-            # --- TGCN Step ---
-            # 6. Update TGCN State using Mt (via sparse graph)
+            # --- Prepare Inputs for TGCN Cell ---
+            # TGCN expects node features x_t: [B*N, F_tgcn_in]
+            # F_tgcn_in = K * F_in (windowed features per node)
+            x_tgcn_in = v_t_step.reshape(batch_size * N, -1)
+            # Hidden state h_prev_flat is already [B*N, H]
 
-            h_next = self.tgcn(
-                x_t_flat, dynamic_edge_index, dynamic_edge_weight, H=h_prev
-            )
-            h_prev = h_next  # Update hidden state
+            # --- Apply TGCN Cell ---
+            # Uses x_t, h_{t-1}, and the *averaged* dynamic graph M_t
+            h_t_flat = self.tgcn(
+                X=x_tgcn_in,
+                H=h_prev_flat,
+                edge_index=batched_edge_index,
+                edge_weight=batched_edge_weight,
+            )  # Output h_t_flat: [B*N, H]
 
-        # --- Classification ---
-        # 7. Classify based on final state
-        final_state_flat = h_prev.reshape(batch_size, -1)  # [B, N*H]
-        out = self.classifier(final_state_flat)
+            # Update previous hidden state for the next loop iteration
+            h_prev_flat = h_t_flat
+            # Store the output hidden state (optional, e.g., for pooling later)
+            # outputs.append(h_t_flat.view(batch_size, N, H_dim))
 
-        return out  # Shape: [batch, num_classes]
+        # --- Final Classification ---
+        # Use the *last* hidden state h_t_flat from the loop
+        # Reshape from [B*N, H] to [B, N*H] for the linear classifier
+        final_h_reshaped = h_prev_flat.view(batch_size, -1)  # [B, N*H]
+        logits = self.classifier(final_h_reshaped)  # [B, num_classes]
+
+        return logits
+
+
+# def forward(self, x, static_edge_index, static_edge_weight=None):
+#     """
+#     Args:
+#         x (Tensor): Input time series. Shape: [batch, num_nodes, time_steps]
+#         static_edge_index (LongTensor): Shared predefined graph connectivity. Shape: [2, E_static]
+#         static_edge_weight (Tensor, optional): Shared predefined graph weights. Shape: [E_static]
+#     Returns:
+#         out (Tensor): Classification logits. Shape: [batch, num_classes]
+#     """
+#     batch_size, N_main, time_steps = x.shape
+#     device = x.device
+#     N_gsl = self.num_nodes
+#     H_dim = self.tgcn_hidden_dim
+
+#     # --- Initialize States ---
+#     gsl_history_state = self._init_gsl_history(batch_size, device)
+#     # TGCN hidden state shape usually [B*N, H]. Initialize correctly.
+#     h_prev = torch.zeros(batch_size * self.num_nodes, H_dim, device=device)
+
+#     v_t = x.unfold(dimension=-1, size=self.window_size, step=self.window_size)
+#     B, N, num_windows, W = v_t.shape
+
+#     for t in range(num_windows):
+#         # [B, N, W] for current window
+#         v_t_step = v_t[:, :, t, :]
+
+#         # Concatenate with previous hidden state
+#         I_t = torch.cat([v_t_step, h_prev.reshape(-1, self.num_nodes, H_dim)], dim=-1)  # [B, N, W+H]
+
+#         # Graph learning from I_t
+#         Et = self.graph_structure_learner(I_t, static_edge_index, static_edge_weight)  # or batch version if supported
+
+#         edge_index, edge_weight = dense_to_sparse(Et)
+
+#         # Apply TGCN step: input is v_t_step, edge is from I_t, h_prev used internally
+#         h_t = self.tgcn(v_t_step, h_prev, edge_index, edge_weight)  # or custom TGCNCell
+
+#         outputs = h_t
+#         h_prev = h_t
+
+#     # Optionally, take last h_t or pool over time
+#     final = outputs  # [B, N, H]
+#     logits = self.classifier(final)
+
+#     return logits
