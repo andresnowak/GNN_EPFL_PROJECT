@@ -67,14 +67,15 @@ node_idx = {node: i for i, node in enumerate(nodes)}
 edge_index = torch.tensor([[node_idx[u], node_idx[v]] for u, v in edges] +
                           [[node_idx[v], node_idx[u]] for u, v in edges], dtype=torch.long).t().to(device)
 
-lstm_hidden_dim = 128
+lstm_hidden_dim = 64
 lstm_num_layers = 3
 gcn_hidden = 128
 gcn_out = 128
 dropout = 0.2
 
+dir = '/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/wandb/run-20250506_093100-9b1pg5x4/files'
 model = LSTM_GCN(lstm_hidden_dim, lstm_num_layers, gcn_hidden, gcn_out, dropout)
-model.load_state_dict(torch.load("/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/wandb/run-20250504_201709-7zspb3z4/files/best_lstm_gcn_model.pth"))  # Load the trained model weights
+model.load_state_dict(torch.load(f"{dir}/best_lstm_gcn_model.pth"))  # Load the trained model weights
 model.to(device)
 model.eval()
 
@@ -120,5 +121,5 @@ with torch.no_grad():
 submission_df = pd.DataFrame({"id": all_ids, "label": all_predictions})
 
 # Save the DataFrame to a CSV file without an index
-submission_df.to_csv("submission_seed1.csv", index=False)
+submission_df.to_csv(f"{dir}/submission.csv", index=False)
 print("Kaggle submission file generated: submission.csv")
