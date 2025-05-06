@@ -182,8 +182,9 @@ edge_index = torch.tensor([[node_idx[u], node_idx[v]] for u, v in edges] +
                           [[node_idx[v], node_idx[u]] for u, v in edges], dtype=torch.long).t().to(device)
 
 epochs = 1000
-lr = 1e-4
-lstm_hidden_dim = 128
+lr = 5e-5
+weight_decay = 1e-5
+lstm_hidden_dim = 64
 lstm_num_layers = 3
 gcn_hidden = 128
 gcn_out = 128
@@ -194,6 +195,7 @@ wandb.init(project="eeg-lstm-gcn", name="baseline-lstm-gcn", config={
     "epochs": epochs,
     "batch_size": batch_size,
     "lr": lr,
+    "weight_decay": weight_decay,
     "model": "LSTM + GCN",
     "lstm_hidden_dim": lstm_hidden_dim,
     "lstm_num_layers": lstm_num_layers,
@@ -207,15 +209,15 @@ print('Number of trainable parameters:', sum(p.numel() for p in model.parameters
 print('Number of parameters in LSTM:', sum(p.numel() for p in model.lstm.parameters() if p.requires_grad))
 print('Number of parameters in GCN:', sum(p.numel() for p in model.gcn1.parameters() if p.requires_grad) + sum(p.numel() for p in model.gcn2.parameters() if p.requires_grad))
 
-# label_counts = train_df['label'].value_counts()
-# neg, pos = label_counts[0], label_counts[1]
+label_counts = train_df['label'].value_counts()
+neg, pos = label_counts[0], label_counts[1]
 
-# Inverse frequency weighting for BCEWithLogitsLoss
-# pos_weight = torch.tensor([neg / pos], dtype=torch.float32).to(device)
-# print(f"Using pos_weight={pos_weight.item():.4f} for class imbalance correction.")
+# # Inverse frequency weighting for BCEWithLogitsLoss
+pos_weight = torch.tensor([neg / pos], dtype=torch.float32).to(device)
+print(f"Using pos_weight={pos_weight.item():.4f} for class imbalance correction.")
 
 criterion = nn.BCEWithLogitsLoss()
-optimizer = optim.Adam(model.parameters(), lr=lr)
+optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
 # Training loop
 best_acc = 0.0
