@@ -1,0 +1,1 @@
+This operation (.nonzero()) is generally not differentiable, so it seems dense to sparse causes problems, well it is more about also how you select the values for the edge weights based on the non zero.

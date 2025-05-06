@@ -1,9 +1,11 @@
-from torch_geometric.nn import GCNConv, TGNMemory
+from torch_geometric.nn import GCNConv
 from torch import nn
 import torch
 from torch_geometric_temporal.nn.recurrent import TGCN
 from torch_geometric.utils.sparse import dense_to_sparse
 from collections import deque
+
+# from tgcn import TGCN
 
 
 class GraphStructureLearner(nn.Module):
@@ -11,20 +13,22 @@ class GraphStructureLearner(nn.Module):
         self,
         node_feature_dim: int,
         embed_dim: int,
-        alpha: float=1.0,
-        device: str="cpu",
+        alpha: float = 1.0,
+        device: str = "cpu",
     ):
         super(GraphStructureLearner, self).__init__()
 
         self.alpha = alpha
 
         # the amount of in_channels is the the size of the node v features
-        self.gconv = GCNConv(in_channels=node_feature_dim, out_channels=embed_dim).to(device)
+        self.gconv = GCNConv(in_channels=node_feature_dim, out_channels=embed_dim).to(
+            device
+        )
 
         # calculate the dynamic features of src and dst nodes (allows the model to learn directed or asymmetric relationships between node)
         self.linear_de1 = nn.Linear(embed_dim, embed_dim).to(device)
         self.linear_de2 = nn.Linear(embed_dim, embed_dim).to(device)
-    
+
     def forward(self, v_h, edge_list, edge_weights):
         # We want batch_size, the number of nodes and then the features for gconv
 
@@ -34,20 +38,24 @@ class GraphStructureLearner(nn.Module):
         de2 = torch.tanh(self.alpha * self.linear_de2(df))
 
         # Et = RELU(tanh(alpha * (DE1 * DE2^T - DE2 * DE1^T))) - Simplified interpretation
-        Et = torch.relu(torch.tanh(self.alpha * (de1 @ de2.transpose(-2, -1) - de2 @ de1.transpose(-2, -1))))
+        Et = torch.relu(
+            torch.tanh(
+                self.alpha * (de1 @ de2.transpose(-2, -1) - de2 @ de1.transpose(-2, -1))
+            )
+        )
 
         # mt = Et.mean(dim = 1) # the adjacency matrix at time t will be the average of the windows (that we did on the 12 second window coarse grained lable)
 
         return Et
-    
+
 
 class DTGCN(nn.Module):
     def __init__(
         self,
         num_nodes: int,
         gsl_embed_dim: int,
-        tgcn_hidden_dim: int, # The H size
-        window_size: int, # K window size
+        tgcn_hidden_dim: int,  # The H size
+        window_size: int,  # K window size
         gsl_alpha: float,
         gsl_avg_steps: int,
         num_classes: int,
@@ -63,11 +71,14 @@ class DTGCN(nn.Module):
         self.tgcn_hidden_dim = tgcn_hidden_dim
 
         gcn_in_channels = window_size + tgcn_hidden_dim
-        self.graph_structure_learner = GraphStructureLearner(gcn_in_channels,gsl_embed_dim, device=device)
-        self.tgcn = TGCN(window_size, tgcn_hidden_dim).to(device) # accepts at forward always a different graph adjacency and list
+        self.graph_structure_learner = GraphStructureLearner(
+            gcn_in_channels, gsl_embed_dim, device=device
+        )
+        self.tgcn = TGCN(window_size, tgcn_hidden_dim).to(
+            device
+        )  # accepts at forward always a different graph adjacency and list
 
         self.classifier = nn.Linear(tgcn_hidden_dim * num_nodes, num_classes).to(device)
-
 
     def forward(self, x, static_edge_index, static_edge_weight=None):
         """
@@ -102,9 +113,10 @@ class DTGCN(nn.Module):
         x_permuted = x.permute(0, 1, 3, 2)  # [B, N, F_in, T]
         # Unfold along the last dim (T): size=K, step=1 (for sliding window)
         # Output shape: [B, N, F_in, num_windows, K] where num_windows = T - K + 1
-        v_t_unfolded = x_permuted.unfold(dimension=-1, size=self.window_size, step=1)
-        
-        print(v_t_unfolded.shape)
+        v_t_unfolded = x_permuted.unfold(
+            dimension=-1, size=self.window_size, step=self.window_size
+        )
+
         # Permute and reshape V_t to be [B, num_windows, N, K*F_in] for easier iteration
         v_t = v_t_unfolded.permute(0, 3, 1, 4, 2).reshape(
             batch_size, -1, N, self.window_size * F_in
@@ -122,7 +134,6 @@ class DTGCN(nn.Module):
 
             # Concatenate V_t and H_{t-1} to form I_t: [B, N, K*F_in + H]
             I_t = torch.cat([v_t_step, h_prev], dim=-1)
-
 
             # --- Graph Structure Learning ---
             # Using the simplified GSL that takes [B, N, F]
@@ -147,7 +158,7 @@ class DTGCN(nn.Module):
                 Mt_batch = Et
 
             # --- Convert Averaged Graph to Batched Sparse Format ---
-            batched_edge_index, batched_edge_weight = dense_to_sparse(Mt_batch)
+            batched_edge_index, batched_edge_weight = batched_adj_to_edge_list(Mt_batch)
 
             # --- Prepare Inputs for TGCN Cell ---
             # TGCN expects node features x_t: [B*N, F_tgcn_in]
@@ -178,48 +189,34 @@ class DTGCN(nn.Module):
         return logits
 
 
-# def forward(self, x, static_edge_index, static_edge_weight=None):
-#     """
-#     Args:
-#         x (Tensor): Input time series. Shape: [batch, num_nodes, time_steps]
-#         static_edge_index (LongTensor): Shared predefined graph connectivity. Shape: [2, E_static]
-#         static_edge_weight (Tensor, optional): Shared predefined graph weights. Shape: [E_static]
-#     Returns:
-#         out (Tensor): Classification logits. Shape: [batch, num_classes]
-#     """
-#     batch_size, N_main, time_steps = x.shape
-#     device = x.device
-#     N_gsl = self.num_nodes
-#     H_dim = self.tgcn_hidden_dim
+def batched_adj_to_edge_list(adj, threshold=1e-8):
+    """
+    Converts a batched adjacency matrix to a batched edge list and edge weights.
 
-#     # --- Initialize States ---
-#     gsl_history_state = self._init_gsl_history(batch_size, device)
-#     # TGCN hidden state shape usually [B*N, H]. Initialize correctly.
-#     h_prev = torch.zeros(batch_size * self.num_nodes, H_dim, device=device)
+    Args:
+        adj (Tensor): Batched adjacency matrix of shape (batch_size, num_nodes, num_nodes).
+        threshold (float): Threshold value to filter edges.
 
-#     v_t = x.unfold(dimension=-1, size=self.window_size, step=self.window_size)
-#     B, N, num_windows, W = v_t.shape
+    Returns:
+        edge_index (LongTensor): Edge indices in COO format with shape (2, num_edges).
+        edge_weights (Tensor): Edge weights with shape (num_edges,).
+    """
+    # Apply threshold to create a mask for edges to keep
+    mask = adj > threshold
 
-#     for t in range(num_windows):
-#         # [B, N, W] for current window
-#         v_t_step = v_t[:, :, t, :]
+    # Get indices of non-zero elements (edges) in the batched adjacency matrix
+    batch_indices, rows, cols = mask.nonzero(as_tuple=True)
 
-#         # Concatenate with previous hidden state
-#         I_t = torch.cat([v_t_step, h_prev.reshape(-1, self.num_nodes, H_dim)], dim=-1)  # [B, N, W+H]
+    # Extract the corresponding edge weights (gradients preserved here)
+    edge_weights = adj[batch_indices, rows, cols]
 
-#         # Graph learning from I_t
-#         Et = self.graph_structure_learner(I_t, static_edge_index, static_edge_weight)  # or batch version if supported
+    # Calculate global node indices accounting for the batch
+    num_nodes = adj.size(1)
+    offset = batch_indices * num_nodes
+    global_rows = rows + offset
+    global_cols = cols + offset
 
-#         edge_index, edge_weight = dense_to_sparse(Et)
+    # Stack to form the edge_index in COO format
+    edge_index = torch.stack([global_rows, global_cols], dim=0)
 
-#         # Apply TGCN step: input is v_t_step, edge is from I_t, h_prev used internally
-#         h_t = self.tgcn(v_t_step, h_prev, edge_index, edge_weight)  # or custom TGCNCell
-
-#         outputs = h_t
-#         h_prev = h_t
-
-#     # Optionally, take last h_t or pool over time
-#     final = outputs  # [B, N, H]
-#     logits = self.classifier(final)
-
-#     return logits
+    return edge_index, edge_weights
