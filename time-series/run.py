@@ -214,8 +214,8 @@ print(
     "Number of trainable parameters:",
     sum(p.numel() for p in model.parameters() if p.requires_grad),
 )
-
-
+# print('Number of parameters in LSTM:', sum(p.numel() for p in model.lstm.parameters() if p.requires_grad))
+# print('Number of parameters in GCN:', sum(p.numel() for p in model.gcn1.parameters() if p.requires_grad) + sum(p.numel() for p in model.gcn2.parameters() if p.requires_grad))
 
 label_counts = train_df["label"].value_counts()
 neg, pos = label_counts[0], label_counts[1]
@@ -274,7 +274,7 @@ for epoch in range(epochs):
 
     with torch.no_grad():
         for x_batch, y_batch in loader_tr:
-            x_batch = x_batch.float().to(device)
+            x_batch = x_batch.float().to(device).transpose(-2, -1)
             y_batch = y_batch.float().unsqueeze(1).to(device)
 
             logits = model(x_batch, edge_index)
@@ -295,7 +295,7 @@ for epoch in range(epochs):
 
     with torch.no_grad():
         for x_batch, y_batch in loader_val:
-            x_batch = x_batch.float().to(device)
+            x_batch = x_batch.float().to(device).transpose(-2, -1)
             y_batch = y_batch.float().unsqueeze(1).to(device)
 
             logits = model(x_batch, edge_index)
@@ -326,4 +326,4 @@ for epoch in range(epochs):
 wandb.finish()
 
 # Save the model
-torch.save(model.state_dict(), os.path.join(wandb.run.dir, "final_lstm_gcn_model.pth"))
+torch.save(model.state_dict(), os.path.join(wandb.run.dir, "final_dtgcn_model.pth"))
