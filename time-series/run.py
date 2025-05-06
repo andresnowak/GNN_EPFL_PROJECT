@@ -108,6 +108,7 @@ dataset_tr = EEGDataset(
     prefetch=True,
 )
 
+
 dataset_val = EEGDataset(
     val_df,
     signals_root=DATA_ROOT / "train",
@@ -171,7 +172,7 @@ edge_weight = torch.tensor(weights, dtype=torch.float32).to(device)
 epochs = 100
 lr = 5e-5
 weight_decay = 1e-5
-number_of_nodes = len(edge_index)
+number_of_nodes = 19
 gsl_embed_dim = 100
 tgcn_hidden_dim = 200
 window_size = 50
@@ -213,6 +214,8 @@ print(
     "Number of trainable parameters:",
     sum(p.numel() for p in model.parameters() if p.requires_grad),
 )
+
+
 
 label_counts = train_df["label"].value_counts()
 neg, pos = label_counts[0], label_counts[1]
