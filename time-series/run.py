@@ -213,15 +213,6 @@ print(
     "Number of trainable parameters:",
     sum(p.numel() for p in model.parameters() if p.requires_grad),
 )
-print(
-    "Number of parameters in LSTM:",
-    sum(p.numel() for p in model.lstm.parameters() if p.requires_grad),
-)
-print(
-    "Number of parameters in GCN:",
-    sum(p.numel() for p in model.gcn1.parameters() if p.requires_grad)
-    + sum(p.numel() for p in model.gcn2.parameters() if p.requires_grad),
-)
 
 label_counts = train_df["label"].value_counts()
 neg, pos = label_counts[0], label_counts[1]
