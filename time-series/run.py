@@ -24,6 +24,7 @@ from models import DTGCN
 
 import wandb
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import f1_score
 
 
 def seed_everything(seed: int):
@@ -272,6 +273,9 @@ for epoch in range(epochs):
     correct = 0
     total = 0
 
+    all_preds = []
+    all_labels = []
+
     with torch.no_grad():
         for x_batch, y_batch in loader_tr:
             x_batch = x_batch.float().to(device).transpose(-2, -1)
@@ -282,16 +286,30 @@ for epoch in range(epochs):
             correct += (preds == y_batch.bool()).sum().item()
             total += y_batch.size(0)
 
+            all_preds.extend(preds.cpu().numpy().flatten())
+            all_labels.extend(y_batch.cpu().numpy().flatten())
+
     train_acc = correct / total
+    train_f1 = f1_score(all_labels, all_preds)
     print(f"Total training points: {total}")
     print(
-        f"Epoch [{epoch + 1}/{epochs}], Train Loss: {avg_loss:.4f}, Train accuracy: {train_acc:.4f}"
+        f"Epoch [{epoch + 1}/{epochs}], Train Loss: {avg_loss:.4f}, Train accuracy: {train_acc:.4f}, Train F1: {train_f1:.4f}"
     )
-    wandb.log({"train_loss": avg_loss, "train_accuracy": train_acc, "epoch": epoch + 1})
+    wandb.log(
+        {
+            "train_loss": avg_loss,
+            "train_accuracy": train_acc,
+            "train_f1": train_f1,
+            "epoch": epoch + 1,
+        }
+    )
 
     val_correct = 0
     val_total = 0
     val_loss = 0.0
+
+    all_preds = []
+    all_labels = []
 
     with torch.no_grad():
         for x_batch, y_batch in loader_val:
@@ -306,15 +324,20 @@ for epoch in range(epochs):
             val_correct += (preds == y_batch.bool()).sum().item()
             val_total += y_batch.size(0)
 
+            all_preds.extend(preds.cpu().numpy().flatten())
+            all_labels.extend(y_batch.cpu().numpy().flatten())
+
     val_acc = val_correct / val_total
     val_loss /= len(loader_val)
+    val_f1 = f1_score(all_labels, all_preds) 
     print(f"Total validation points: {val_total}")
 
     print(
-        f"Epoch [{epoch + 1}/{epochs}], Validation Loss: {val_loss:.4f}, Valid accuracy: {val_acc:.4f}"
+        f"Epoch [{epoch + 1}/{epochs}], Validation Loss: {val_loss:.4f}, Valid accuracy: {val_acc:.4f}, Validation F1: {val_f1:.4f}"
     )
-    wandb.log({"val_loss": val_loss, "valid_accuracy": val_acc, "epoch": epoch + 1})
+    wandb.log({"val_loss": val_loss, "valid_accuracy": val_acc, "val_f1": val_f1, "epoch": epoch + 1})
 
+    # Should we also use here f1 instead of accuracy?
     # Save model if best accuracy so far
     if val_acc > best_acc:
         best_acc = val_acc
