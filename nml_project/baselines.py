@@ -30,6 +30,7 @@ from model import LSTM_GCN
 
 import wandb
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import f1_score
 
 def seed_everything(seed: int):
     # Python random module
@@ -141,48 +142,49 @@ nodes = [
     'O1', 'O2'
 ]
 
-# Define edge list (bidirectional edges for undirected graph)
+# Define edge list
 edges = [
-    ('FP1', 'F7'), ('FP1', 'F3'), ('FP1', 'FP2'),
-    ('FP2', 'F4'), ('FP2', 'F8'),
+    ('FP1', 'F7'), ('FP1', 'F3'), ('FP1', 'FP2'), ('FP1', 'FZ'),
+    ('FP2', 'F4'), ('FP2', 'F8'), ('FP2', 'FZ'),
     ('F7', 'F3'), ('F3', 'FZ'), ('FZ', 'F4'), ('F4', 'F8'),
     ('F7', 'T3'), ('F3', 'C3'), ('FZ', 'CZ'), ('F4', 'C4'), ('F8', 'T4'),
     ('T3', 'C3'), ('C3', 'CZ'), ('CZ', 'C4'), ('C4', 'T4'),
     ('T3', 'T5'), ('C3', 'P3'), ('CZ', 'PZ'), ('C4', 'P4'), ('T4', 'T6'),
     ('T5', 'P3'), ('P3', 'PZ'), ('PZ', 'P4'), ('P4', 'T6'),
-    ('T5', 'O1'), ('P3', 'O1'), ('PZ', 'O1'), ('PZ', 'O2'), ('P4', 'O2'), ('T6', 'O2')
+    ('T5', 'O1'), ('P3', 'O1'), ('PZ', 'O1'), ('PZ', 'O2'), ('P4', 'O2'), ('T6', 'O2'),
+    ('O1', 'O2')
 ]
 
 # Create a mapping from node names to indices
 node_idx = {node: i for i, node in enumerate(nodes)}
 
 # Load distances
-# dist_df = pd.read_csv('distances3d.csv')
-# distance_dict = {}
+dist_df = pd.read_csv('/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/distances_3d.csv')
+distance_dict = {}
 
-# for _, row in dist_df.iterrows():
-#     key1 = (row['from'], row['to'])
-#     key2 = (row['to'], row['from'])  # ensure symmetry
-#     distance_dict[key1] = row['distance']
-#     distance_dict[key2] = row['distance']
+for _, row in dist_df.iterrows():
+    key1 = (row['from'], row['to'])
+    key2 = (row['to'], row['from'])  # ensure symmetry
+    distance_dict[key1] = row['distance']
+    distance_dict[key2] = row['distance']
     
-# epsilon = 1e-6
-# edge_weights = []
+epsilon = 1e-6
+edge_weights = []
+edge_index = []
 
-# for u, v in edges:
-#     dist = distance_dict.get((u, v), 1.0)  # fallback if missing
-#     weight = 1.0 / (dist + epsilon)
-#     edge_weights.append(weight)  # u→v
-#     edge_weights.append(weight)  # v→u  (since you duplicate edges)
+for u, v in edges:
+    dist = distance_dict.get((u, v), 1.0)  # fallback if missing
+    weight = 1.0 / (dist + epsilon)
+    edge_weights.append(weight)  # u→v
+    edge_weights.append(weight)  # v→u
+    edge_index.append((node_idx[u], node_idx[v]))  # u→v
+    edge_index.append((node_idx[v], node_idx[u]))  # v→u
     
-# edge_weight = torch.tensor(edge_weights, dtype=torch.float32).to(device)
-
-# Convert edge list to index tensors
-edge_index = torch.tensor([[node_idx[u], node_idx[v]] for u, v in edges] +
-                          [[node_idx[v], node_idx[u]] for u, v in edges], dtype=torch.long).t().to(device)
+edge_weight = torch.tensor(edge_weights, dtype=torch.float32).to(device)
+edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous().to(device)
 
 epochs = 1000
-lr = 5e-5
+lr = 1e-4
 weight_decay = 1e-5
 lstm_hidden_dim = 64
 lstm_num_layers = 3
@@ -220,10 +222,28 @@ criterion = nn.BCEWithLogitsLoss()
 optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
 # Training loop
-best_acc = 0.0
+best_f1 = 0.0
 ckpt_path = os.path.join(wandb.run.dir, "best_lstm_gcn_model.pth")
 print(f'Model path is: {ckpt_path}')
 global_step = 0
+
+global_min = float('inf')
+global_max = float('-inf')
+
+for x, _ in loader_tr:
+    batch_min = x.min().item()
+    batch_max = x.max().item()
+    global_min = min(global_min, batch_min)
+    global_max = max(global_max, batch_max)
+
+print(f"Global min: {global_min}, max: {global_max}")
+normalization_stats = {
+    "global_min": global_min,
+    "global_max": global_max
+}
+torch.save(normalization_stats, os.path.join(wandb.run.dir, "normalization_stats.pth"))
+
+epsilon = 1e-8
 
 for epoch in range(epochs):
     model.train()
@@ -232,8 +252,9 @@ for epoch in range(epochs):
     for x_batch, y_batch in loader_tr:
         x_batch = x_batch.float().to(device)
         y_batch = y_batch.float().unsqueeze(1).to(device)
+        x_batch = 2 * (x_batch - global_min) / (global_max - global_min + epsilon) - 1
 
-        logits = model(x_batch, edge_index)
+        logits = model(x_batch, edge_index, edge_weight)
         loss = criterion(logits, y_batch)
 
         optimizer.zero_grad()
@@ -261,51 +282,60 @@ for epoch in range(epochs):
     model.eval()
     correct = 0
     total = 0
-
+    train_preds = []
+    train_labels = []
     with torch.no_grad():
         for x_batch, y_batch in loader_tr:
             x_batch = x_batch.float().to(device)
+            x_batch = 2 * (x_batch - global_min) / (global_max - global_min + epsilon) - 1
             y_batch = y_batch.float().unsqueeze(1).to(device)
 
-            logits = model(x_batch, edge_index)
+            logits = model(x_batch, edge_index, edge_weight)
             preds = torch.sigmoid(logits) >= 0.5
             correct += (preds == y_batch.bool()).sum().item()
             total += y_batch.size(0)
+            train_preds.extend(preds.cpu().numpy())
+            train_labels.extend(y_batch.cpu().numpy())
 
     train_acc = correct / total
+    train_f1 = f1_score(train_labels, train_preds, zero_division=0)
     print(f'Total training points: {total}')
-    print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {avg_loss:.4f}, Train accuracy: {train_acc:.4f}")
-    wandb.log({"train_loss": avg_loss, "train_accuracy": train_acc, "epoch": epoch + 1})
+    print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {avg_loss:.4f}, Train accuracy: {train_acc:.4f}, Train F1: {train_f1:.4f}")
+    wandb.log({"train_loss": avg_loss, "train_accuracy": train_acc, "train_f1": train_f1, "epoch": epoch + 1})
     
     val_correct = 0
     val_total = 0
     val_loss = 0.0
-
+    val_preds = []
+    val_labels = []
     with torch.no_grad():
         for x_batch, y_batch in loader_val:
             x_batch = x_batch.float().to(device)
+            x_batch = 2 * (x_batch - global_min) / (global_max - global_min + epsilon) - 1
             y_batch = y_batch.float().unsqueeze(1).to(device)
 
-            logits = model(x_batch, edge_index)
+            logits = model(x_batch, edge_index, edge_weight)
             loss = criterion(logits, y_batch)
             val_loss += loss.item()
 
             preds = torch.sigmoid(logits) >= 0.5
             val_correct += (preds == y_batch.bool()).sum().item()
             val_total += y_batch.size(0)
+            val_preds.extend(preds.cpu().numpy())
+            val_labels.extend(y_batch.cpu().numpy())
 
     val_acc = val_correct / val_total
+    val_f1 = f1_score(val_labels, val_preds, zero_division=0)
     val_loss /= len(loader_val)
     print(f'Total validation points: {val_total}')
-
-    print(f"Epoch [{epoch+1}/{epochs}], Validation Loss: {val_loss:.4f}, Valid accuracy: {val_acc:.4f}")
-    wandb.log({"val_loss": val_loss, "valid_accuracy": val_acc, "epoch": epoch + 1})
+    print(f"Epoch [{epoch+1}/{epochs}], Validation Loss: {val_loss:.4f}, Valid accuracy: {val_acc:.4f}, Valid F1: {val_f1:.4f}")
+    wandb.log({"val_loss": val_loss, "val_accuracy": val_acc, "val_f1": val_f1, "epoch": epoch + 1})
     
     # Save model if best accuracy so far
-    if val_acc > best_acc:
-        best_acc = val_acc
+    if val_f1 > best_f1:
+        best_f1 = val_f1
         torch.save(model.state_dict(), ckpt_path)
-        print(f"✅ New best model saved with accuracy: {val_acc:.4f} at epoch {epoch+1}")
+        print(f"✅ New best model saved with F1: {val_f1:.4f} at epoch {epoch+1}")
 
 wandb.finish()
 
