@@ -42,30 +42,52 @@ loader_te = DataLoader(dataset_te, batch_size=64, shuffle=False)
 
 # Define node list (in order, matching your image)
 nodes = [
-    'Fp1', 'Fp2', 'F7', 'F3', 'Fz', 'F4', 'F8',
-    'T3', 'C3', 'Cz', 'C4', 'T4',
-    'T5', 'P3', 'Pz', 'P4', 'T6',
+    'FP1', 'FP2', 'F7', 'F3', 'FZ', 'F4', 'F8',
+    'T3', 'C3', 'CZ', 'C4', 'T4',
+    'T5', 'P3', 'PZ', 'P4', 'T6',
     'O1', 'O2'
 ]
 
-# Define edge list (bidirectional edges for undirected graph)
+# Define edge list
 edges = [
-    ('Fp1', 'F7'), ('Fp1', 'F3'), ('Fp1', 'Fp2'),
-    ('Fp2', 'F4'), ('Fp2', 'F8'),
-    ('F7', 'F3'), ('F3', 'Fz'), ('Fz', 'F4'), ('F4', 'F8'),
-    ('F7', 'T3'), ('F3', 'C3'), ('Fz', 'Cz'), ('F4', 'C4'), ('F8', 'T4'),
-    ('T3', 'C3'), ('C3', 'Cz'), ('Cz', 'C4'), ('C4', 'T4'),
-    ('T3', 'T5'), ('C3', 'P3'), ('Cz', 'Pz'), ('C4', 'P4'), ('T4', 'T6'),
-    ('T5', 'P3'), ('P3', 'Pz'), ('Pz', 'P4'), ('P4', 'T6'),
-    ('T5', 'O1'), ('P3', 'O1'), ('Pz', 'O1'), ('Pz', 'O2'), ('P4', 'O2'), ('T6', 'O2')
+    ('FP1', 'F7'), ('FP1', 'F3'), ('FP1', 'FP2'), ('FP1', 'FZ'),
+    ('FP2', 'F4'), ('FP2', 'F8'), ('FP2', 'FZ'),
+    ('F7', 'F3'), ('F3', 'FZ'), ('FZ', 'F4'), ('F4', 'F8'),
+    ('F7', 'T3'), ('F3', 'C3'), ('FZ', 'CZ'), ('F4', 'C4'), ('F8', 'T4'),
+    ('T3', 'C3'), ('C3', 'CZ'), ('CZ', 'C4'), ('C4', 'T4'),
+    ('T3', 'T5'), ('C3', 'P3'), ('CZ', 'PZ'), ('C4', 'P4'), ('T4', 'T6'),
+    ('T5', 'P3'), ('P3', 'PZ'), ('PZ', 'P4'), ('P4', 'T6'),
+    ('T5', 'O1'), ('P3', 'O1'), ('PZ', 'O1'), ('PZ', 'O2'), ('P4', 'O2'), ('T6', 'O2'),
+    ('O1', 'O2')
 ]
 
 # Create a mapping from node names to indices
 node_idx = {node: i for i, node in enumerate(nodes)}
 
-# Convert edge list to index tensors
-edge_index = torch.tensor([[node_idx[u], node_idx[v]] for u, v in edges] +
-                          [[node_idx[v], node_idx[u]] for u, v in edges], dtype=torch.long).t().to(device)
+# Load distances
+dist_df = pd.read_csv('/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/distances_3d.csv')
+distance_dict = {}
+
+for _, row in dist_df.iterrows():
+    key1 = (row['from'], row['to'])
+    key2 = (row['to'], row['from'])  # ensure symmetry
+    distance_dict[key1] = row['distance']
+    distance_dict[key2] = row['distance']
+
+epsilon = 1e-6
+edge_weights = []
+edge_index = []
+
+for u, v in edges:
+    dist = distance_dict.get((u, v), 1.0)  # fallback if missing
+    weight = 1.0 / (dist + epsilon)
+    edge_weights.append(weight)  # u→v
+    edge_weights.append(weight)  # v→u
+    edge_index.append((node_idx[u], node_idx[v]))  # u→v
+    edge_index.append((node_idx[v], node_idx[u]))  # v→u
+
+edge_weight = torch.tensor(edge_weights, dtype=torch.float32).to(device)
+edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous().to(device)
 
 lstm_hidden_dim = 64
 lstm_num_layers = 3
@@ -73,7 +95,7 @@ gcn_hidden = 128
 gcn_out = 128
 dropout = 0.2
 
-dir = '/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/wandb/run-20250506_093100-9b1pg5x4/files'
+dir = '/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/wandb/run-20250508_203543-u504814k/files'
 model = LSTM_GCN(lstm_hidden_dim, lstm_num_layers, gcn_hidden, gcn_out, dropout)
 model.load_state_dict(torch.load(f"{dir}/best_lstm_gcn_model.pth"))  # Load the trained model weights
 model.to(device)
@@ -95,6 +117,11 @@ def clean_underscores(s):
 
     return s
 
+normalization_stats = torch.load(f'{dir}/normalization_stats.pth')
+global_min = normalization_stats["global_min"]
+global_max = normalization_stats["global_max"]
+epsilon = 1e-8
+
 # Disable gradient computation for inference
 with torch.no_grad():
     for batch in loader_te:
@@ -105,9 +132,10 @@ with torch.no_grad():
 
         # Move the input data to the device (GPU or CPU)
         x_batch = x_batch.float().to(device)
+        x_batch = 2 * (x_batch - global_min) / (global_max - global_min + epsilon) - 1
 
         # Perform the forward pass to get the model's output logits
-        logits = model(x_batch, edge_index)
+        logits = model(x_batch, edge_index, edge_weight)
 
         # Convert logits to predictions.
         # For binary classification, threshold logits at 0 (adjust this if you use softmax or multi-class).
