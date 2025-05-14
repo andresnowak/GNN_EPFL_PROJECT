@@ -26,7 +26,7 @@ from torch.utils.data import DataLoader
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from model import LSTM_GCN
+from model import LSTM_GAT
 
 import wandb
 from sklearn.model_selection import train_test_split
@@ -119,7 +119,7 @@ dataset_val = EEGDataset(
 The `EEGDataset` class is compatible with [pytorch datasets and dataloaders](https://pytorch.org/tutorials/beginner/basics/data_tutorial.html), which allow you to load batched data.
 """
 
-batch_size = 128
+batch_size = 64
 loader_tr = DataLoader(dataset_tr, batch_size=batch_size, shuffle=True)
 loader_val = DataLoader(dataset_val, batch_size=batch_size, shuffle=False)
 
@@ -183,47 +183,49 @@ for u, v in edges:
 edge_weight = torch.tensor(edge_weights, dtype=torch.float32).to(device)
 edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous().to(device)
 
-epochs = 1000
-lr = 1e-4
+epochs = 500
+lr = 7.5e-5
 weight_decay = 1e-5
-lstm_hidden_dim = 64
+lstm_hidden_dim = 128
 lstm_num_layers = 3
-gcn_hidden = 128
-gcn_out = 128
+gat_hidden = 256
+gat_out = 256
+num_heads = 16
 dropout = 0.2
 
 # Initialize Weights and Biases
-wandb.init(project="eeg-lstm-gcn", name="baseline-lstm-gcn", config={
+wandb.init(project="eeg-lstm-gat", config={
     "epochs": epochs,
     "batch_size": batch_size,
     "lr": lr,
     "weight_decay": weight_decay,
-    "model": "LSTM + GCN",
+    "model": "LSTM + gat",
     "lstm_hidden_dim": lstm_hidden_dim,
     "lstm_num_layers": lstm_num_layers,
     "dropout": dropout,
-    "gcn_hidden": gcn_hidden,
-    "gcn_out": gcn_out
+    "num_heads": num_heads,
+    "gat_hidden": gat_hidden,
+    "gat_out": gat_out
 })
 
-model = LSTM_GCN(lstm_hidden_dim, lstm_num_layers, gcn_hidden, gcn_out, dropout).to(device)  # binary classification
+model = LSTM_GAT(lstm_hidden_dim, lstm_num_layers, gat_hidden, gat_out, num_heads, dropout).to(device)  # binary classification
 print('Number of trainable parameters:', sum(p.numel() for p in model.parameters() if p.requires_grad))
 print('Number of parameters in LSTM:', sum(p.numel() for p in model.lstm.parameters() if p.requires_grad))
-print('Number of parameters in GCN:', sum(p.numel() for p in model.gcn1.parameters() if p.requires_grad) + sum(p.numel() for p in model.gcn2.parameters() if p.requires_grad))
+print('Number of parameters in gat:', sum(p.numel() for p in model.gat1.parameters() if p.requires_grad) + sum(p.numel() for p in model.gat2.parameters() if p.requires_grad))
 
-label_counts = train_df['label'].value_counts()
-neg, pos = label_counts[0], label_counts[1]
+# label_counts = train_df['label'].value_counts()
+# neg, pos = label_counts[0], label_counts[1]
 
-# # Inverse frequency weighting for BCEWithLogitsLoss
-pos_weight = torch.tensor([neg / pos], dtype=torch.float32).to(device)
-print(f"Using pos_weight={pos_weight.item():.4f} for class imbalance correction.")
+# # # Inverse frequency weighting for BCEWithLogitsLoss
+# pos_weight = torch.tensor([neg / pos], dtype=torch.float32).to(device)
+# print(f"Using pos_weight={pos_weight.item():.4f} for class imbalance correction.")
 
 criterion = nn.BCEWithLogitsLoss()
 optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
 # Training loop
 best_f1 = 0.0
-ckpt_path = os.path.join(wandb.run.dir, "best_lstm_gcn_model.pth")
+ckpt_path = os.path.join(wandb.run.dir, "best_lstm_gat_model.pth")
 print(f'Model path is: {ckpt_path}')
 global_step = 0
 
@@ -340,4 +342,4 @@ for epoch in range(epochs):
 wandb.finish()
 
 # Save the model
-torch.save(model.state_dict(), os.path.join(wandb.run.dir, "final_lstm_gcn_model.pth"))
+torch.save(model.state_dict(), os.path.join(wandb.run.dir, "final_lstm_gat_model.pth"))
