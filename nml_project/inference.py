@@ -3,7 +3,7 @@ import torch
 from scipy import signal
 from seiz_eeg.dataset import EEGDataset
 import numpy as np
-from model import LSTM_GCN
+from model import LSTM_GCN, LSTM_GAT
 import pandas as pd
 from pathlib import Path
 import re
@@ -89,15 +89,16 @@ for u, v in edges:
 edge_weight = torch.tensor(edge_weights, dtype=torch.float32).to(device)
 edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous().to(device)
 
-lstm_hidden_dim = 64
+lstm_hidden_dim = 128
 lstm_num_layers = 3
-gcn_hidden = 128
-gcn_out = 128
+gat_hidden = 256
+gat_out = 256
+num_heads = 4
 dropout = 0.2
 
-dir = '/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/wandb/run-20250508_203543-u504814k/files'
-model = LSTM_GCN(lstm_hidden_dim, lstm_num_layers, gcn_hidden, gcn_out, dropout)
-model.load_state_dict(torch.load(f"{dir}/best_lstm_gcn_model.pth"))  # Load the trained model weights
+dir = '/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/wandb/run-20250512_224508-c3obaacy/files'
+model = LSTM_GAT(lstm_hidden_dim, lstm_num_layers, gat_hidden, gat_out, num_heads, dropout).to(device) 
+model.load_state_dict(torch.load(f"{dir}/best_lstm_gat_model.pth"))  # Load the trained model weights
 model.to(device)
 model.eval()
 
