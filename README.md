@@ -1,9 +1,9 @@
 # GNN_EPFL_PROJECT
 
 ### Train and Validation Set
-segments_train.parquet: Contains 88 Unique Patients and 19.37% Samples are Seizures.
+segments_train.parquet: Contains 88 Unique Patients, 19.37% Samples are Seizures, Total% Samples are 9.12%
 
-segments_val.parquet: Contains 9 Unique Patients and 19.39% Samples are Seizures.
+segments_val.parquet: Contains 9 Unique Patients, 19.39% Samples are Seizures, Total% of Samples are 90.87%
 
 You can use it directly as:
 
