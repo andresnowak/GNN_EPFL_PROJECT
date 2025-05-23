@@ -261,9 +261,10 @@ class TGCNWrapper(nn.Module):
             
             # Combine states (mean of averages)
             combined = (H_avg + H_2_avg) / 2
+            combined = H_avg + H_2_avg
             
             # Classify
-            out = self.classifier(combined.mean(dim=0))  # [out_dim]
+            out = self.classifier(H_2_avg)  # [out_dim]
             all_outputs.append(out)
 
         return torch.stack(all_outputs)  # [batch_size, out_dim]
