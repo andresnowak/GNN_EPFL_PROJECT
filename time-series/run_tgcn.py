@@ -9,6 +9,7 @@ from seiz_eeg.dataset import EEGDataset
 
 import os
 import random
+from time import time
 
 import numpy as np
 
@@ -16,15 +17,17 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from torch_geometric.data import Data
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from src.models import DTGCN
+from src.models import TGCNWrapper
 
 import wandb
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
+from tqdm import tqdm
 
 
 def seed_everything(seed: int):
@@ -45,7 +48,7 @@ def seed_everything(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
-# seed_everything(1)
+seed_everything(1)
 
 
 """# The data
@@ -69,12 +72,13 @@ print("Loading Data")
 
 data_path = "../data"  # we use relative path
 DATA_ROOT = Path(data_path)
-clips_tr = pd.read_parquet(DATA_ROOT / "train/segments.parquet")
+clips_tr = pd.read_parquet(DATA_ROOT / "train/segments.parquet", engine="pyarrow", use_threads=True, memory_map=True)
 
 # Stratified split based on labels
 train_df, val_df = train_test_split(
     clips_tr, test_size=0.1, random_state=1, stratify=clips_tr["label"]
 )
+
 
 """## Loading the signals
 
@@ -102,20 +106,24 @@ def fft_filtering(x: np.ndarray) -> np.ndarray:
 
 
 # Create training and validation datasets
+start_temp = time()
 dataset_tr = EEGDataset(
     train_df,
     signals_root=DATA_ROOT / "train",
-    signal_transform=time_filtering,
-    prefetch=True,
+    signal_transform=fft_filtering,
+    # prefetch=True,
 )
 
 
 dataset_val = EEGDataset(
     val_df,
     signals_root=DATA_ROOT / "train",
-    signal_transform=time_filtering,
-    prefetch=True,
+    signal_transform=fft_filtering,
+    # prefetch=True,
 )
+
+print(f"Time taken for filtering: {time() - start_temp}")
+
 
 """## Compatibility with PyTorch
 
@@ -123,6 +131,7 @@ The `EEGDataset` class is compatible with [pytorch datasets and dataloaders](htt
 """
 
 batch_size = 128
+
 loader_tr = DataLoader(dataset_tr, batch_size=batch_size, shuffle=True)
 loader_val = DataLoader(dataset_val, batch_size=batch_size, shuffle=False)
 
@@ -170,15 +179,12 @@ edge_index = torch.tensor([src, dst], dtype=torch.long).to(device)
 edge_weight = torch.tensor(weights, dtype=torch.float32).to(device)
 
 
-epochs = 100
+epochs = 200
 lr = 5e-5
 weight_decay = 1e-5
 number_of_nodes = 19
-gsl_embed_dim = 100
+input_size = 354
 tgcn_hidden_dim = 200
-window_size = 50
-gsl_alpha = 1
-gsl_average_steps = 1
 number_of_classes = 1
 
 print("Training Model")
@@ -186,44 +192,35 @@ print("Training Model")
 # Initialize Weights and Biases
 wandb.init(
     project="eeg-DTGCN",
-    name="DTGCN",
+    name="TGCN",
     config={
+        "data_type": "fft_series",
         "epochs": epochs,
         "batch_size": batch_size,
         "lr": lr,
         "weight_decay": weight_decay,
-        "model": "DTGCN",
-        "gsl_embed_dim": gsl_embed_dim,
+        "model": "TGCN",
         "tgcn_hidden_dim": tgcn_hidden_dim,
-        "window_size": window_size,
-        "gsl_alpha": gsl_alpha,
-        "gsl_average_steps": gsl_average_steps,
     },
 )
 
-model = DTGCN(
-    number_of_nodes,
-    gsl_embed_dim,
+model = TGCNWrapper(
+    input_size,
     tgcn_hidden_dim,
-    window_size,
-    gsl_alpha,
-    gsl_average_steps,
     number_of_classes,
-    device,
-)  # binary classification
+).to(device)  # binary classification
 print(
     "Number of trainable parameters:",
     sum(p.numel() for p in model.parameters() if p.requires_grad),
 )
-# print('Number of parameters in LSTM:', sum(p.numel() for p in model.lstm.parameters() if p.requires_grad))
-# print('Number of parameters in GCN:', sum(p.numel() for p in model.gcn1.parameters() if p.requires_grad) + sum(p.numel() for p in model.gcn2.parameters() if p.requires_grad))
+
 
 label_counts = train_df["label"].value_counts()
 neg, pos = label_counts[0], label_counts[1]
 
-# # Inverse frequency weighting for BCEWithLogitsLoss
+# Inverse frequency weighting for BCEWithLogitsLoss
 pos_weight = torch.tensor([neg / pos], dtype=torch.float32).to(device)
-print(f"Using pos_weight={pos_weight.item():.4f} for class imbalance correction.")
+print(f"Using pos_weight={pos_weight.item():.4f} for class imbalance correction.") # helps with balancing class imablance by giving more weight to the class that appears less
 
 criterion = nn.BCEWithLogitsLoss()
 optimizer = optim.AdamW(model.parameters(), lr=lr)
@@ -234,14 +231,14 @@ ckpt_path = os.path.join(wandb.run.dir, "best_dtgcn_model.pth")
 print(f"Model path is: {ckpt_path}")
 global_step = 0
 
-for epoch in range(epochs):
+for epoch in tqdm(range(epochs), desc="Training"):
     model.train()
     running_loss = 0.0
 
     for x_batch, y_batch in loader_tr:
         x_batch = (
             x_batch.float().to(device).transpose(-2, -1)
-        )  # [batch_size, seq_len, input_dim]
+        )  # [batch_size, num_nodes, seq_len]
         y_batch = y_batch.float().unsqueeze(1).to(device)
 
         logits = model(x_batch, edge_index, edge_weight)
@@ -278,7 +275,7 @@ for epoch in range(epochs):
 
     with torch.no_grad():
         for x_batch, y_batch in loader_tr:
-            x_batch = x_batch.float().to(device).transpose(-2, -1)
+            x_batch = x_batch.float().to(device).transpose(-2, -1) # to have [batch, num_nodes, seq_len]
             y_batch = y_batch.float().unsqueeze(1).to(device)
 
             logits = model(x_batch, edge_index)
