@@ -187,6 +187,7 @@ class DTGCN(nn.Module):
         logits = self.classifier(final_h_reshaped)  # [B, num_classes]
 
         return logits
+    
 
 
 def batched_adj_to_edge_list(adj, threshold=1e-8):
