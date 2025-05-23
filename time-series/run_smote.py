@@ -93,6 +93,7 @@ def main(config: dict):
     lstm_hidden_size = config["model"]["lstm_hidden_size"]
     fc1_units = config["model"]["fc1_units"]
     number_of_classes = 1
+    max_norm = config["training"]["max_norm"]
 
     print("Training Model")
 
@@ -111,6 +112,7 @@ def main(config: dict):
             "resnet_kernel_size": resnet_kernel_size,
             "lstm_hidden_size": lstm_hidden_size,
             "fc1_units": fc1_units,
+            "max_norm": max_norm,
         },
     )
 
@@ -169,7 +171,7 @@ def main(config: dict):
             loss.backward()
 
             # Gradient clipping
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
 
             # Log total gradient norm
             total_norm = 0.0
@@ -264,13 +266,13 @@ def main(config: dict):
                 f"✅ New best model saved with accuracy: {val_acc:.4f} at epoch {epoch + 1}"
             )
 
-    wandb.finish()
-
     # Save the model
     torch.save(
         model.state_dict(),
         os.path.join(wandb.run.dir, config["checkpoint"]["final_model_filename"]),
     )
+
+    wandb.finish()
 
 
 if __name__ == "__main__":

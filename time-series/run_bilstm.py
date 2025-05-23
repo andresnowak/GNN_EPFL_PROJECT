@@ -148,7 +148,7 @@ def main(config: dict):
         for x_batch, y_batch in loader_tr:
             x_batch = (
                 x_batch.float().to(device)
-            )  # [batch_size, seq_len, num_nodes]
+            )  # [batch_size, seq_len, num_nodes] # NOTE: don't know if to do it like this or num_nodes, seq_len
             y_batch = y_batch.float().unsqueeze(1).to(device)
 
             logits = model(x_batch)
@@ -185,7 +185,7 @@ def main(config: dict):
 
         with torch.no_grad():
             for x_batch, y_batch in loader_tr:
-                x_batch = x_batch.float().to(device).transpose(-2, -1) # to have [batch, num_nodes, seq_len]
+                x_batch = x_batch.float().to(device)
                 y_batch = y_batch.float().unsqueeze(1).to(device)
 
                 logits = model(x_batch)
@@ -220,7 +220,7 @@ def main(config: dict):
 
         with torch.no_grad():
             for x_batch, y_batch in loader_val:
-                x_batch = x_batch.float().to(device).transpose(-2, -1)
+                x_batch = x_batch.float().to(device)
                 y_batch = y_batch.float().unsqueeze(1).to(device)
 
                 logits = model(x_batch)
@@ -253,13 +253,13 @@ def main(config: dict):
                 f"✅ New best model saved with accuracy: {val_acc:.4f} at epoch {epoch + 1}"
             )
 
-    wandb.finish()
-
     # Save the model
     torch.save(
         model.state_dict(),
         os.path.join(wandb.run.dir, config["checkpoint"]["final_model_filename"]),
     )
+
+    wandb.finish()
 
 
 if __name__ == "__main__":
