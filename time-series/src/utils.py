@@ -97,7 +97,7 @@ def load_eeg_data(
         signal_transform=time_filtering
         if filtering_type == "time_domain"
         else fft_filtering,
-        # prefetch=True,
+        prefetch=True,
     )
 
     dataset_val = EEGDataset(
@@ -106,7 +106,7 @@ def load_eeg_data(
         signal_transform=time_filtering
         if filtering_type == "time_domain"
         else fft_filtering,
-        # prefetch=True,
+        prefetch=True,
     )
 
     print(f"Time taken for filtering: {time() - start_temp}")

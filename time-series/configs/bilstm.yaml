@@ -12,29 +12,26 @@ val_split_size: 0.1 # Proportion of training data to use for validation
 
 # --- Preprocessing Settings ---
 signal_processing:
-  filtering_type: "time_domain"
+  filtering_type: "frequency_domain"
   bandpass_filter:
     order: 4
     lowcut: 0.5
     highcut: 30.0
     fs: 250
 
-# --- Model Settings (SMOTE, based on EEGNet_Paper) ---
-# Note: The script uses `num_nodes` (19) for `num_eeg_channels`.
 model:
-  name: "SMOTE" 
+  name: "BiLSTM" 
   num_eeg_channels: 19
-  initial_filters: 16 # As per Tconv output and ResNet1 input
-  resnet_kernel_size: 7 # As per Table 2
-  lstm_hidden_size: 220 # L=220 from Table 2 LSTM
-  fc1_units: 110  # From Table 2 FC1
+  hidden_size: 256
+  num_layers: 2
+  fc_layers: [256, 64]
   num_classes: 1
 
 # --- Training Hyperparameters ---
 training:
   batch_size: 128
   epochs: 200
-  lr: 0.00005 # 5e-5
+  lr: 0.0005 # 5e-4
   weight_decay: 0.00001 # 1e-5
   max_norm: 1.0
   pos_weight: True
@@ -42,11 +39,11 @@ training:
 # --- Checkpoint Settings ---
 checkpoint:
   save_dir_in_wandb: true # Saves checkpoints in wandb run directory
-  best_model_filename: "best_smote_model.pth"
-  final_model_filename: "final_smote_model.pth" # Note: script uses 'final_dtgcn_model.pth' but refers to SMOTE model
+  best_model_filename: "best_bilstm_model.pth"
+  final_model_filename: "final_bilstm_model.pth" # Note: script uses 'final_dtgcn_model.pth' but refers to SMOTE model
 
 # --- Weights & Biases Logging ---
 wandb:
   project: "eeg-DTGCN"
-  run_name: "SMOTE" # Or leave empty for auto-generated
+  run_name: "BiLSTM"
   log_gradients: true

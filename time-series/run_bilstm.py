@@ -29,7 +29,7 @@ import wandb
 from sklearn.metrics import f1_score
 from tqdm import tqdm
 
-from src.smote import SMOTE
+from src.bilstm import BiLSTMClassifier
 from src.utils import load_config, load_eeg_data, load_graph
 
 
@@ -51,12 +51,8 @@ def seed_everything(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
-seed_everything(1)
-
-
-
-
 def main(config: dict):
+    seed_everything(config["seed"])
 
     dataset_tr, dataset_val, train_df = load_eeg_data(config["data_path"], config["train_parquet_file"], config["val_parquet_file"], config["signal_processing"]["filtering_type"])
 
@@ -88,11 +84,11 @@ def main(config: dict):
     lr = config["training"]["lr"]
     num_nodes = config["model"]["num_eeg_channels"]
     weight_decay = config["training"]["weight_decay"]
-    initial_filters = config["model"]["initial_filters"]
-    resnet_kernel_size = config["model"]["resnet_kernel_size"]
-    lstm_hidden_size = config["model"]["lstm_hidden_size"]
-    fc1_units = config["model"]["fc1_units"]
+    lstm_hidden_size = config["model"]["hidden_size"]
+    num_layers = config["model"]["num_layers"]
+    fc_layers = config["model"]["fc_layers"]
     number_of_classes = 1
+    max_norm = config["training"]["max_norm"]
 
     print("Training Model")
 
@@ -107,20 +103,20 @@ def main(config: dict):
             "lr": lr,
             "weight_decay": weight_decay,
             "model": config["model"]["name"],
-            "initial_filters": initial_filters,
-            "resnet_kernel_size": resnet_kernel_size,
             "lstm_hidden_size": lstm_hidden_size,
-            "fc1_units": fc1_units,
+            "lstm_layers": num_layers,
+            "fc1_layers": fc_layers,
+            "max_norm": max_norm,
+            "pos_weight": config["training"]["pos_weight"],
         },
     )
 
-    model = SMOTE(
-        num_eeg_channels=num_nodes,
-        initial_filters=initial_filters,
-        resnet_kernel_size=resnet_kernel_size,
-        lstm_hidden_size=lstm_hidden_size, 
-        fc1_units=fc1_units,
-        num_classes=number_of_classes,
+    model = BiLSTMClassifier(
+        input_dim = num_nodes,
+        hidden_dim = lstm_hidden_size,
+        output_dim = number_of_classes,
+        num_layers = num_layers,
+        fc_layers = fc_layers
     ).to(device)
     print(
         "Number of trainable parameters:",
@@ -132,16 +128,9 @@ def main(config: dict):
     neg, pos = label_counts[0], label_counts[1]
 
     # Inverse frequency weighting for BCEWithLogitsLoss
-    # Inverse frequency weighting for BCEWithLogitsLoss
-    pos_weight = (
-        torch.tensor([neg / pos], dtype=torch.float32).to(device)
-        if config["training"]["pos_weight"]
-        else None
-    )
+    pos_weight = torch.tensor([neg / pos], dtype=torch.float32).to(device) if config["training"]["pos_weight"] else None
     if config["training"]["pos_weight"]:
-        print(
-            f"Using pos_weight={pos_weight.item():.4f} for class imbalance correction."
-        )  # helps with balancing class imablance by giving more weight to the class that appears less
+        print(f"Using pos_weight={pos_weight.item():.4f} for class imbalance correction.") # helps with balancing class imablance by giving more weight to the class that appears less
 
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
@@ -158,8 +147,8 @@ def main(config: dict):
 
         for x_batch, y_batch in loader_tr:
             x_batch = (
-                x_batch.float().to(device).transpose(-2, -1)
-            )  # [batch_size, num_nodes, seq_len]
+                x_batch.float().to(device)
+            )  # [batch_size, seq_len, num_nodes]
             y_batch = y_batch.float().unsqueeze(1).to(device)
 
             logits = model(x_batch)
@@ -169,7 +158,7 @@ def main(config: dict):
             loss.backward()
 
             # Gradient clipping
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
 
             # Log total gradient norm
             total_norm = 0.0
@@ -274,7 +263,7 @@ def main(config: dict):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="SMOTE")
+    parser = argparse.ArgumentParser(description="BiLSTM")
 
     parser.add_argument('--config', required=True, help="Path to yaml config file")
 
