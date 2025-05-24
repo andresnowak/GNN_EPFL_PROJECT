@@ -18,7 +18,6 @@ import torch.nn.functional as F
 
 import wandb
 
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
 
 from models import GAT
@@ -61,12 +60,10 @@ These segments, and their labels, are described in the `segments.parquet` files,
 #     ├── signals/
 #     ├── segments.parquet
 
-data_path = "/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/data/train"
+data_path = "/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project"
 DATA_ROOT = Path(data_path)
-clips_tr = pd.read_parquet(DATA_ROOT / "train/segments.parquet")
-
-# Stratified split based on labels
-train_df, val_df = train_test_split(clips_tr, test_size=0.2, random_state=1, stratify=clips_tr['label'])
+clips_tr = pd.read_parquet(DATA_ROOT / "segments_train.parquet")
+clips_va = pd.read_parquet(DATA_ROOT / "segments_val.parquet")
 
 """## Loading the signals
 
@@ -92,15 +89,15 @@ def fft_filtering(x: np.ndarray) -> np.ndarray:
 
 # Create training and validation datasets
 dataset_tr = EEGDataset(
-    train_df,
-    signals_root=DATA_ROOT / "train",
+    clips_tr,
+    signals_root= DATA_ROOT/"data"/"train"/"train",
     signal_transform=fft_filtering,
     prefetch=True,
 )
 
 dataset_val = EEGDataset(
-    val_df,
-    signals_root=DATA_ROOT / "train",
+    clips_va,
+    signals_root=DATA_ROOT/"data"/"train"/"train",
     signal_transform=fft_filtering,
     prefetch=True,
 )
@@ -114,23 +111,16 @@ batch_size = 64
 loader_tr = DataLoader(dataset_tr, batch_size=batch_size, shuffle=True)
 loader_val = DataLoader(dataset_val, batch_size=batch_size, shuffle=False)
 
-"""## Baseline: LSTM model for sequential data
-
-In this section, we provide a simple baseline for the project using an LSTM model without any special optimization.
-"""
-
-"""# LSTM + GNN"""
-
 # Set up device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
-# Define node list (in order, matching your image)
 nodes = [
-    'FP1', 'FP2', 'F7', 'F3', 'FZ', 'F4', 'F8',
-    'T3', 'C3', 'CZ', 'C4', 'T4',
-    'T5', 'P3', 'PZ', 'P4', 'T6',
-    'O1', 'O2'
+    'FP1', 'FP2', 'F3', 'F4', 
+    'C3', 'C4', 'P3', 'P4', 
+    'O1', 'O2', 'F7', 'F8', 
+    'T3', 'T4', 'T5','T6', 
+    'FZ', 'CZ', 'PZ', 
 ]
 
 # Define edge list
@@ -175,70 +165,70 @@ edge_weight = torch.tensor(edge_weights, dtype=torch.float32).to(device)
 edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous().to(device)
 
 epochs = 500
-lr = 7.5e-5
+lr = 1e-4
 weight_decay = 1e-5
-lstm_hidden_dim = 128
-lstm_num_layers = 3
-gtf_hidden = 256
-gtf_out = 256
+gat_input = 354
+gat_hidden = 1024
+gat_out = 1024
 num_heads = 16
 dropout = 0.2
-pos_enc_dim = 8
+weighted_loss = True
+gradient_clip = True
+normalization = True
 
 # Initialize Weights and Biases
-wandb.init(project="eeg-lstm-gat", config={
+wandb.init(project="eeg-gat", config={
     "epochs": epochs,
     "batch_size": batch_size,
     "lr": lr,
     "weight_decay": weight_decay,
-    "model": "LSTM + gtf",
-    "lstm_hidden_dim": lstm_hidden_dim,
-    "lstm_num_layers": lstm_num_layers,
-    "dropout": dropout,
+    "model": "gat",
+    "gat_input": gat_input,
+    "gat_hidden": gat_hidden,
+    "gat_out": gat_out,
     "num_heads": num_heads,
-    "gtf_hidden": gtf_hidden,
-    "gtf_out": gtf_out,
-    "pos_enc_dim": pos_enc_dim
+    "dropout": dropout,
+    "weighted_loss": weighted_loss,
+    "gradient_clip": gradient_clip,
+    "normalization": normalization,
 })
 
-model = LSTM_GraphTransformer(lstm_hidden_dim, lstm_num_layers, gtf_hidden, gtf_out, num_heads, dropout, pos_enc_dim).to(device)  # binary classification
+model = GAT(gat_input, gat_hidden, gat_out, num_heads, dropout).to(device)  # binary classification
 print('Number of trainable parameters:', sum(p.numel() for p in model.parameters() if p.requires_grad))
-print('Number of parameters in LSTM:', sum(p.numel() for p in model.lstm.parameters() if p.requires_grad))
-print('Number of parameters in GraphTransformers:', sum(p.numel() for p in model.gtf1.parameters() if p.requires_grad) + sum(p.numel() for p in model.gtf2.parameters() if p.requires_grad) + sum(p.numel() for p in model.gtf3.parameters() if p.requires_grad))
 
-# label_counts = train_df['label'].value_counts()
-# neg, pos = label_counts[0], label_counts[1]
-
-# # # Inverse frequency weighting for BCEWithLogitsLoss
-# pos_weight = torch.tensor([neg / pos], dtype=torch.float32).to(device)
-# print(f"Using pos_weight={pos_weight.item():.4f} for class imbalance correction.")
-
-criterion = nn.BCEWithLogitsLoss()
+if weighted_loss:
+    label_counts = clips_tr['label'].value_counts()
+    neg, pos = label_counts[0], label_counts[1]
+    pos_weight = torch.tensor([neg / pos], dtype=torch.float32).to(device)
+    wandb.config.pos_weight = pos_weight
+    print(f"Using pos_weight={pos_weight.item():.4f} for class imbalance correction.")
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+else:
+    criterion = nn.BCEWithLogitsLoss()
 optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
 # Training loop
 best_f1 = 0.0
-ckpt_path = os.path.join(wandb.run.dir, "best_lstm_gtf_model.pth")
+ckpt_path = os.path.join(wandb.run.dir, "best_gat_model.pth")
 print(f'Model path is: {ckpt_path}')
 global_step = 0
-
 global_min = float('inf')
 global_max = float('-inf')
 
-for x, _ in loader_tr:
-    batch_min = x.min().item()
-    batch_max = x.max().item()
-    global_min = min(global_min, batch_min)
-    global_max = max(global_max, batch_max)
+if normalization:
+    for x, _ in loader_tr:
+        batch_min = x.min().item()
+        batch_max = x.max().item()
+        global_min = min(global_min, batch_min)
+        global_max = max(global_max, batch_max)
 
-print(f"Global min: {global_min}, max: {global_max}")
-normalization_stats = {
-    "global_min": global_min,
-    "global_max": global_max
-}
-torch.save(normalization_stats, os.path.join(wandb.run.dir, "normalization_stats.pth"))
-
-epsilon = 1e-8
+    print(f"Global min: {global_min}, max: {global_max}")
+    normalization_stats = {
+        "global_min": global_min,
+        "global_max": global_max
+    }
+    torch.save(normalization_stats, os.path.join(wandb.run.dir, "normalization_stats.pth"))
+    epsilon = 1e-8
 
 for epoch in range(epochs):
     model.train()
@@ -247,7 +237,8 @@ for epoch in range(epochs):
     for x_batch, y_batch in loader_tr:
         x_batch = x_batch.float().to(device)
         y_batch = y_batch.float().unsqueeze(1).to(device)
-        x_batch = 2 * (x_batch - global_min) / (global_max - global_min + epsilon) - 1
+        if normalization:
+            x_batch = 2 * (x_batch - global_min) / (global_max - global_min + epsilon) - 1
 
         logits = model(x_batch, edge_index, edge_weight)
         loss = criterion(logits, y_batch)
@@ -256,7 +247,8 @@ for epoch in range(epochs):
         loss.backward()
 
         # Gradient clipping
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        if gradient_clip:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
         # Log total gradient norm
         total_norm = 0.0
@@ -293,7 +285,7 @@ for epoch in range(epochs):
             train_labels.extend(y_batch.cpu().numpy())
 
     train_acc = correct / total
-    train_f1 = f1_score(train_labels, train_preds, zero_division=0)
+    train_f1 = f1_score(train_labels, train_preds, average='macro')
     print(f'Total training points: {total}')
     print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {avg_loss:.4f}, Train accuracy: {train_acc:.4f}, Train F1: {train_f1:.4f}")
     wandb.log({"train_loss": avg_loss, "train_accuracy": train_acc, "train_f1": train_f1, "epoch": epoch + 1})
@@ -320,7 +312,7 @@ for epoch in range(epochs):
             val_labels.extend(y_batch.cpu().numpy())
 
     val_acc = val_correct / val_total
-    val_f1 = f1_score(val_labels, val_preds, zero_division=0)
+    val_f1 = f1_score(val_labels, val_preds, average='macro')
     val_loss /= len(loader_val)
     print(f'Total validation points: {val_total}')
     print(f"Epoch [{epoch+1}/{epochs}], Validation Loss: {val_loss:.4f}, Valid accuracy: {val_acc:.4f}, Valid F1: {val_f1:.4f}")
@@ -335,4 +327,4 @@ for epoch in range(epochs):
 wandb.finish()
 
 # Save the model
-torch.save(model.state_dict(), os.path.join(wandb.run.dir, "final_lstm_gat_model.pth"))
+torch.save(model.state_dict(), os.path.join(wandb.run.dir, "final_gat_model.pth"))

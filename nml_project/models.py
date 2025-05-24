@@ -1,7 +1,7 @@
 import torch
 from torch_geometric.data import Data
 from torch_geometric.data import Data, Batch
-from torch_geometric.nn import GCNConv, GATConv, GraphNorm, global_mean_pool, TransformerConv, LaplacianEigenmaps
+from torch_geometric.nn import GCNConv, GATConv, GraphNorm, global_mean_pool, TransformerConv
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -25,7 +25,7 @@ class GAT(nn.Module):
         self.gat2 = GATConv(gat_hidden, per_head_hidden, heads=num_heads, dropout=dropout)
         self.norm2 = GraphNorm(gat_hidden)
 
-        self.gat3 = GATConv(gat_hidden, per_head_out,    heads=num_heads, dropout=dropout)
+        self.gat3 = GATConv(gat_hidden, per_head_out, heads=num_heads, dropout=dropout)
         self.norm3 = GraphNorm(gat_out)
 
         self.dropout = nn.Dropout(dropout)
@@ -42,7 +42,8 @@ class GAT(nn.Module):
             nn.init.constant_(self.classifier.bias, 0.0)
 
     def forward(self, x, edge_index, edge_weight=None):
-        # x: [batch_size, seq_len, num_nodes]
+        x = x.permute(0, 2, 1)
+        # x: [batch_size, num_nodes, seq_len]
         batch_size, _, _ = x.shape
 
         # build a batch of PyG graphs
@@ -259,7 +260,7 @@ class LSTM_GraphTransformer(nn.Module):
             dropout=dropout
         )
         self.pos_enc_dim = pos_enc_dim
-        self.pos_encoder = LaplacianEigenmaps(k=pos_enc_dim, normalization='sym', is_undirected=True)
+        # self.pos_encoder = LaplacianEigenmaps(k=pos_enc_dim, normalization='sym', is_undirected=True)
         self.dropout = nn.Dropout(dropout)
 
         self.tf1 = TransformerConv(2 * lstm_hidden_dim + pos_enc_dim, gtf_hidden // num_heads, heads=num_heads, dropout=dropout)
@@ -309,14 +310,14 @@ class LSTM_GraphTransformer(nn.Module):
         batch_graph = Batch.from_data_list(graphs).to(device)
 
         # Compute Laplacian positional encodings on GPU
-        pos_enc = self.pos_encoder(
-            edge_index=batch_graph.edge_index,
-            batch=batch_graph.batch,
-            num_nodes=batch_graph.num_nodes,
-            edge_weight=batch_graph.edge_weight
-        )
-        pos_enc = pos_enc.to(device)
-        batch_graph.x = torch.cat([batch_graph.x, pos_enc], dim=-1)
+        # pos_enc = self.pos_encoder(
+        #     edge_index=batch_graph.edge_index,
+        #     batch=batch_graph.batch,
+        #     num_nodes=batch_graph.num_nodes,
+        #     edge_weight=batch_graph.edge_weight
+        # )
+        # pos_enc = pos_enc.to(device)
+        # batch_graph.x = torch.cat([batch_graph.x, pos_enc], dim=-1)
 
         # Transformer layers
         x_input = batch_graph.x

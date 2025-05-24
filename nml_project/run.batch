@@ -5,6 +5,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
 #SBATCH --time=10:00:00
+#SBATCH --account=ee-452
 #SBATCH --mem=32GB
 
 source /work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/.nml/bin/activate
@@ -14,4 +15,4 @@ echo "Python binary: $(which python)"
 echo "Python version: $(python --version)"
 
 # Run the script
-srun python3 baselines.py
+srun python3 gat.py
