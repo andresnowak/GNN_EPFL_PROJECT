@@ -24,7 +24,7 @@ def load_config(path: str) -> Dict[str, Any]:
         
 
 def load_eeg_data(
-    data_path: str, train_path: str, val_path: str, filtering_type: str
+    data_path: str, train_path: str, val_path: str, filtering_type: str, robust: bool = False
 ) -> tuple[EEGDataset, EEGDataset, pd.DataFrame]:
     """## Compatibility with PyTorch
 
@@ -63,7 +63,11 @@ def load_eeg_data(
     )
 
     # Stratified split based on labels
-    train_df, val_df = train_test_split(
+    if robust:
+        train_df = clips_tr
+        val_df = clips_val
+    else:
+        train_df, val_df = train_test_split(
         clips_tr, test_size=0.1, random_state=1, stratify=clips_tr["label"]
     )
 
