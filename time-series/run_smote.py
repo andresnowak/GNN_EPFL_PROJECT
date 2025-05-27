@@ -31,6 +31,7 @@ from tqdm import tqdm
 
 from src.smote import SMOTE
 from src.utils import load_config, load_eeg_data, load_graph
+from src.schedulers import LinearWarmupScheduler
 
 
 def seed_everything(seed: int):
@@ -113,6 +114,7 @@ def main(config: dict):
             "lstm_hidden_size": lstm_hidden_size,
             "fc1_units": fc1_units,
             "max_norm": max_norm,
+            "warmup_ratio": config["training"]["warmup_ratio"] if config["training"]["lr_scheduler"] else None
         },
     )
 
@@ -147,6 +149,8 @@ def main(config: dict):
 
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
+    if config["training"]["lr_scheduler"]:
+        scheduler = LinearWarmupScheduler(optimizer, config["training"]["warmup_ratio"], len(loader_tr) * epochs)
 
     # Training loop
     best_acc = 0.0
@@ -180,10 +184,19 @@ def main(config: dict):
                     param_norm = p.grad.data.norm(2)
                     total_norm += param_norm.item() ** 2
             total_norm = total_norm**0.5
-            wandb.log({"grad_norm": total_norm, "global_step": global_step})
+            wandb.log(
+                {
+                    "grad_norm": total_norm,
+                    "global_step": global_step,
+                    "lr_rate": optimizer.param_groups[0]["lr"],
+                }
+            )
             global_step += 1
 
             optimizer.step()
+            if config["training"]["lr_scheduler"]:
+                scheduler.step()
+
             running_loss += loss.item()
 
         avg_loss = running_loss / len(loader_tr)
@@ -255,7 +268,7 @@ def main(config: dict):
         print(
             f"Epoch [{epoch + 1}/{epochs}], Validation Loss: {val_loss:.4f}, Valid accuracy: {val_acc:.4f}, Validation F1: {val_f1:.4f}"
         )
-        wandb.log({"val_loss": val_loss, "valid_accuracy": val_acc, "val_f1": val_f1, "epoch": epoch + 1})
+        wandb.log({"eval_loss": val_loss, "eval_accuracy": val_acc, "eval_f1": val_f1, "epoch": epoch + 1})
 
         # Should we also use here f1 instead of accuracy?
         # Save model if best accuracy so far
