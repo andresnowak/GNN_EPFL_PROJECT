@@ -3,7 +3,7 @@ import torch
 from scipy import signal
 from seiz_eeg.dataset import EEGDataset
 import numpy as np
-from model import LSTM_GCN, LSTM_GAT
+from models import LSTM_GAT
 import pandas as pd
 from pathlib import Path
 import re
@@ -95,8 +95,10 @@ gat_hidden = 256
 gat_out = 256
 num_heads = 4
 dropout = 0.2
+normalization = False
 
-dir = '/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/wandb/run-20250512_224508-c3obaacy/files'
+run_name = 'run-20250526_155620-vcucg9r9'
+dir = f'/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/wandb/{run_name}/files'
 model = LSTM_GAT(lstm_hidden_dim, lstm_num_layers, gat_hidden, gat_out, num_heads, dropout).to(device) 
 model.load_state_dict(torch.load(f"{dir}/best_lstm_gat_model.pth"))  # Load the trained model weights
 model.to(device)
@@ -118,10 +120,11 @@ def clean_underscores(s):
 
     return s
 
-normalization_stats = torch.load(f'{dir}/normalization_stats.pth')
-global_min = normalization_stats["global_min"]
-global_max = normalization_stats["global_max"]
-epsilon = 1e-8
+if normalization:
+    normalization_stats = torch.load(f'{dir}/normalization_stats.pth')
+    global_min = normalization_stats["global_min"]
+    global_max = normalization_stats["global_max"]
+    epsilon = 1e-8
 
 # Disable gradient computation for inference
 with torch.no_grad():
@@ -133,7 +136,8 @@ with torch.no_grad():
 
         # Move the input data to the device (GPU or CPU)
         x_batch = x_batch.float().to(device)
-        x_batch = 2 * (x_batch - global_min) / (global_max - global_min + epsilon) - 1
+        if normalization:
+            x_batch = 2 * (x_batch - global_min) / (global_max - global_min + epsilon) - 1
 
         # Perform the forward pass to get the model's output logits
         logits = model(x_batch, edge_index, edge_weight)
@@ -150,5 +154,5 @@ with torch.no_grad():
 submission_df = pd.DataFrame({"id": all_ids, "label": all_predictions})
 
 # Save the DataFrame to a CSV file without an index
-submission_df.to_csv(f"{dir}/submission.csv", index=False)
+submission_df.to_csv(f"{dir}/submission_{run_name}.csv", index=False)
 print("Kaggle submission file generated: submission.csv")

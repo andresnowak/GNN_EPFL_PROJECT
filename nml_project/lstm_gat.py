@@ -20,7 +20,7 @@ import wandb
 
 from sklearn.metrics import f1_score
 
-from models import GAT
+from models import LSTM_GAT
 
 def seed_everything(seed: int):
     # Python random module
@@ -164,26 +164,29 @@ for u, v in edges:
 edge_weight = torch.tensor(edge_weights, dtype=torch.float32).to(device)
 edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous().to(device)
 
-epochs = 500
+epochs = 300
 lr = 1e-4
 weight_decay = 1e-5
-gat_input = 354
-gat_hidden = 1024
-gat_out = 1024
-num_heads = 16
+lstm_hidden_dim = 128
+lstm_num_layers = 3
+gat_hidden = 256
+gat_out = 256
+num_heads = 4
 dropout = 0.2
 weighted_loss = True
 gradient_clip = True
 normalization = False
+learn_rate_scheduler = True
 
 # Initialize Weights and Biases
-wandb.init(project="eeg-gat", config={
+wandb.init(project="eeg-lstm-gatv2", config={
     "epochs": epochs,
     "batch_size": batch_size,
     "lr": lr,
     "weight_decay": weight_decay,
-    "model": "gat",
-    "gat_input": gat_input,
+    "model": "lstm + gat",
+    "lstm_hidden_dim": lstm_hidden_dim,
+    "lstm_num_layers": lstm_num_layers,
     "gat_hidden": gat_hidden,
     "gat_out": gat_out,
     "num_heads": num_heads,
@@ -191,10 +194,13 @@ wandb.init(project="eeg-gat", config={
     "weighted_loss": weighted_loss,
     "gradient_clip": gradient_clip,
     "normalization": normalization,
+    "learn_rate_scheduler": learn_rate_scheduler
 })
 
-model = GAT(gat_input, gat_hidden, gat_out, num_heads, dropout).to(device)  # binary classification
+model = LSTM_GAT(lstm_hidden_dim, lstm_num_layers, gat_hidden, gat_out, num_heads, dropout).to(device)
 print('Number of trainable parameters:', sum(p.numel() for p in model.parameters() if p.requires_grad))
+print('Number of parameters in LSTM:', sum(p.numel() for p in model.lstm.parameters() if p.requires_grad))
+print('Number of parameters in GAT:', sum(p.numel() for p in model.gat1.parameters() if p.requires_grad) + sum(p.numel() for p in model.gat2.parameters() if p.requires_grad) + sum(p.numel() for p in model.gat3.parameters() if p.requires_grad))
 
 if weighted_loss:
     label_counts = clips_tr['label'].value_counts()
@@ -206,10 +212,12 @@ if weighted_loss:
 else:
     criterion = nn.BCEWithLogitsLoss()
 optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+if learn_rate_scheduler:
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.75, patience=10)
 
 # Training loop
 best_f1 = 0.0
-ckpt_path = os.path.join(wandb.run.dir, "best_gat_model.pth")
+ckpt_path = os.path.join(wandb.run.dir, "best_lstm_gat_model.pth")
 print(f'Model path is: {ckpt_path}')
 global_step = 0
 global_min = float('inf')
@@ -325,8 +333,11 @@ for epoch in range(epochs):
         best_f1 = val_f1
         torch.save(model.state_dict(), ckpt_path)
         print(f"✅ New best model saved with F1: {val_f1:.4f} at epoch {epoch+1}")
+    
+    wandb.log({"learning_rate": optimizer.param_groups[0]['lr'], "epoch": epoch + 1})
+    scheduler.step(val_loss) if learn_rate_scheduler else None
 
 # Save the model
-torch.save(model.state_dict(), os.path.join(wandb.run.dir, "final_gat_model.pth"))
+torch.save(model.state_dict(), os.path.join(wandb.run.dir, "final_lstm_gat_model.pth"))
 
 wandb.finish()

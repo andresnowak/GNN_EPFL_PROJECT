@@ -181,8 +181,6 @@ class LSTM_GAT(nn.Module):
             dropout=dropout
         )
         self.dropout = nn.Dropout(dropout)
-
-        # GATConv input is (in_channels, out_channels), out = out_channels * heads if concat=True
         self.gat1 = GATConv(2 * lstm_hidden_dim, gat_hidden // num_heads, heads=num_heads, dropout=dropout)
         self.norm1 = GraphNorm(gat_hidden)
         self.gat2 = GATConv(gat_hidden, gat_hidden // num_heads, heads=num_heads, dropout=dropout)
@@ -219,7 +217,7 @@ class LSTM_GAT(nn.Module):
             data = Data(
                 x=node_feats[i],
                 edge_index=edge_index.clone(),
-                edge_weight=edge_weight.clone() if edge_weight is not None else None
+                edge_attr=edge_weight.clone() if edge_weight is not None else None
             )
             graphs.append(data)
 
