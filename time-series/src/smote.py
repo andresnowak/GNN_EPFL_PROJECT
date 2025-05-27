@@ -47,7 +47,7 @@ class ResNetBlock1D(nn.Module):
         out = self.conv2(out)
         out = self.bn2(out)
 
-        out += self.shortcut(residual)
+        out += self.shortcut(residual) # residual
         out = self.relu(out)
 
         return out
@@ -143,7 +143,7 @@ class SMOTE(nn.Module):
             x (torch.Tensor): shape: (batch_size, time_steps, num_eeg_channels) e.g., (B, 500, 21)
         """
 
-        x = x.transpose(-2, -1) # to have [B, num]
+        x = x.transpose(-2, -1) # to have [B, num_channels, timesteps]
 
         # Initial Tconv
         x = self.tconv(x)  # (B, 16, 500)
@@ -161,6 +161,7 @@ class SMOTE(nn.Module):
         # LSTM expects (batch, seq_len, features)
         # Current x: (batch, features, seq_len)
         x = x.permute(0, 2, 1)  # (B, 31, 128)
+        # supppsoedly in the paper they first flatten and then do a reshape, but i don't understand why do a flattening?
 
         # LSTM
         # lstm_out contains all hidden states for all time steps
