@@ -160,8 +160,8 @@ def main(config: dict):
 
         for x_batch, y_batch in loader_tr:
             x_batch = (
-                x_batch.float().to(device).transpose(-2, -1)
-            )  # [batch_size, num_nodes, seq_len]
+                x_batch.float().to(device)
+            )  # [batch_size, seq_len, num_nodes]
             y_batch = y_batch.float().unsqueeze(1).to(device)
 
             logits = model(x_batch)
@@ -198,7 +198,7 @@ def main(config: dict):
 
         with torch.no_grad():
             for x_batch, y_batch in loader_tr:
-                x_batch = x_batch.float().to(device).transpose(-2, -1) # to have [batch, num_nodes, seq_len]
+                x_batch = x_batch.float().to(device) 
                 y_batch = y_batch.float().unsqueeze(1).to(device)
 
                 logits = model(x_batch)
@@ -233,7 +233,7 @@ def main(config: dict):
 
         with torch.no_grad():
             for x_batch, y_batch in loader_val:
-                x_batch = x_batch.float().to(device).transpose(-2, -1)
+                x_batch = x_batch.float().to(device)
                 y_batch = y_batch.float().unsqueeze(1).to(device)
 
                 logits = model(x_batch)

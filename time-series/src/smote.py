@@ -138,7 +138,12 @@ class SMOTE(nn.Module):
         self.fc2 = nn.Linear(fc1_units, num_classes)
 
     def forward(self, x):
-        # x shape: (batch_size, num_eeg_channels, time_steps) e.g., (B, 21, 500)
+        """
+        Args:
+            x (torch.Tensor): shape: (batch_size, time_steps, num_eeg_channels) e.g., (B, 500, 21)
+        """
+
+        x = x.transpose(-2, -1) # to have [B, num]
 
         # Initial Tconv
         x = self.tconv(x)  # (B, 16, 500)
