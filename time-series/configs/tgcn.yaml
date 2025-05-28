@@ -21,7 +21,7 @@ signal_processing:
     fs: 250
 
 model:
-  name: "TGCN" 
+  name: "STGCN" 
   num_eeg_channels: 19
   input_dim: 1
   tgcn_hidden_dim: 200
@@ -35,15 +35,16 @@ training:
   weight_decay: 0.00001 # 1e-5
   max_norm: 1.0
   pos_weight: True
+  smote: False
 
 # --- Checkpoint Settings ---
 checkpoint:
   save_dir_in_wandb: true # Saves checkpoints in wandb run directory
-  best_model_filename: "best_tgcn_model.pth"
-  final_model_filename: "final_tgcn_model.pth" # Note: script uses 'final_dtgcn_model.pth' but refers to SMOTE model
+  best_model_filename: "best_stgcn_model.pth"
+  final_model_filename: "final_stgcn_model.pth" # Note: script uses 'final_dtgcn_model.pth' but refers to SMOTE model
 
 # --- Weights & Biases Logging ---
 wandb:
   project: "eeg-DTGCN"
-  run_name: "TGCN"
+  run_name: "STGCN"
   log_gradients: true

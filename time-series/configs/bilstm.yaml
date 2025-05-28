@@ -37,6 +37,7 @@ training:
   max_norm: 1.0
   pos_weight: True
   lr_scheduler: False
+  smote: True
 
 # --- Checkpoint Settings ---
 checkpoint:
