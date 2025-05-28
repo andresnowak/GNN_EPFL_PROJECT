@@ -111,6 +111,10 @@ def main(config: dict):
             "lstm_layers": num_layers,
             "fc1_layers": fc_layers,
             "max_norm": max_norm,
+            "warmup_ratio": config["training"]["warmup_ratio"]
+            if config["training"]["lr_scheduler"]
+            else None,
+            "smote": config["training"]["smote"],
             "pos_weight": config["training"]["pos_weight"],
         },
     )

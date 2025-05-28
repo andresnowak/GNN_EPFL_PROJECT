@@ -118,12 +118,16 @@ def main(config: dict):
             "input_dim": input_dim,
             "tgcn_hidden_dim": tgcn_hidden_dim,
             "max_norm": max_norm,
+            "warmup_ratio": config["training"]["warmup_ratio"]
+            if config["training"]["lr_scheduler"]
+            else None,
+            "smote": config["training"]["smote"],
             "pos_weight": config["training"]["pos_weight"],
         },
     )
 
     model = TGCNWrapper(
-        input_dim=1,
+        input_dim=input_dim,
         hidden_dim=tgcn_hidden_dim,
         out_dim=number_of_classes,
     ).to(device)

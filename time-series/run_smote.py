@@ -59,8 +59,7 @@ seed_everything(1)
 
 
 def main(config: dict):
-
-    dataset_tr, dataset_val, train_df = load_eeg_data(config["data_path"], config["train_parquet_file"], config["val_parquet_file"], config["signal_processing"]["filtering_type"], robust=robust=config["val_robust"],)
+    dataset_tr, dataset_val, train_df = load_eeg_data(config["data_path"], config["train_parquet_file"], config["val_parquet_file"], config["signal_processing"]["filtering_type"], robust=config["val_robust"])
 
     if config["training"]["smote"]:
         # Apply SMOTE to balance the training data
@@ -120,7 +119,9 @@ def main(config: dict):
             "lstm_hidden_size": lstm_hidden_size,
             "fc1_units": fc1_units,
             "max_norm": max_norm,
-            "warmup_ratio": config["training"]["warmup_ratio"] if config["training"]["lr_scheduler"] else None
+            "warmup_ratio": config["training"]["warmup_ratio"] if config["training"]["lr_scheduler"] else None,
+            "smote": config["training"]["smote"],
+            "pos_weight": config["training"]["pos_weight"]
         },
     )
 
