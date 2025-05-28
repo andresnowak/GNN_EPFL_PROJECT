@@ -29,8 +29,8 @@ import wandb
 from sklearn.metrics import f1_score
 from tqdm import tqdm
 
-from src.models import TGCNWrapper
-from src.utils import load_config, load_eeg_data, load_graph
+from src.tgcn import TGCNWrapper
+from src.utils import load_config, load_eeg_data, load_graph, apply_smote_to_eeg_dataset
 
 
 def seed_everything(seed: int):
@@ -59,7 +59,12 @@ def main(config: dict):
         config["train_parquet_file"],
         config["val_parquet_file"],
         config["signal_processing"]["filtering_type"],
+        robust=config["val_robust"],
     )
+
+    if config["training"]["smote"]:
+        # Apply SMOTE to balance the training data
+        dataset_tr = apply_smote_to_eeg_dataset(dataset_tr)
 
     loader_tr = DataLoader(
         dataset_tr, batch_size=config["training"]["batch_size"], shuffle=True
@@ -118,7 +123,7 @@ def main(config: dict):
     )
 
     model = TGCNWrapper(
-        input_dim=input_dim,
+        input_dim=1,
         hidden_dim=tgcn_hidden_dim,
         out_dim=number_of_classes,
     ).to(device)
@@ -156,8 +161,8 @@ def main(config: dict):
 
         for x_batch, y_batch in loader_tr:
             x_batch = (
-                x_batch.float().to(device).transpose(-2, -1)
-            )  # [batch_size, num_nodes, seq_len]
+                x_batch.float().to(device)
+            )  # [batch_size, seq_len, num_nodes]
             y_batch = y_batch.float().unsqueeze(1).to(device)
 
             logits = model(x_batch, edge_index, edge_weight)
@@ -194,7 +199,7 @@ def main(config: dict):
 
         with torch.no_grad():
             for x_batch, y_batch in loader_tr:
-                x_batch = x_batch.float().to(device).transpose(-2, -1)
+                x_batch = x_batch.float().to(device)
                 y_batch = y_batch.float().unsqueeze(1).to(device)
 
                 logits = model(x_batch, edge_index, edge_weight)
@@ -229,7 +234,7 @@ def main(config: dict):
 
         with torch.no_grad():
             for x_batch, y_batch in loader_val:
-                x_batch = x_batch.float().to(device).transpose(-2, -1)
+                x_batch = x_batch.float().to(device)
                 y_batch = y_batch.float().unsqueeze(1).to(device)
 
                 logits = model(x_batch, edge_index, edge_weight)

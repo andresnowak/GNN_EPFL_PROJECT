@@ -30,7 +30,7 @@ from sklearn.metrics import f1_score
 from tqdm import tqdm
 
 from src.bilstm import BiLSTMClassifier
-from src.utils import load_config, load_eeg_data, load_graph
+from src.utils import load_config, load_eeg_data, load_graph, apply_smote_to_eeg_dataset
 
 
 def seed_everything(seed: int):
@@ -54,7 +54,11 @@ def seed_everything(seed: int):
 def main(config: dict):
     seed_everything(config["seed"])
 
-    dataset_tr, dataset_val, train_df = load_eeg_data(config["data_path"], config["train_parquet_file"], config["val_parquet_file"], config["signal_processing"]["filtering_type"])
+    dataset_tr, dataset_val, train_df = load_eeg_data(config["data_path"], config["train_parquet_file"], config["val_parquet_file"], config["signal_processing"]["filtering_type"], robust=config["val_robust"])
+
+    if config["training"]["smote"]:
+        # Apply SMOTE to balance the training data
+        dataset_tr = apply_smote_to_eeg_dataset(dataset_tr)
 
     loader_tr = DataLoader(dataset_tr, batch_size=config["training"]["batch_size"], shuffle=True)
     loader_val = DataLoader(

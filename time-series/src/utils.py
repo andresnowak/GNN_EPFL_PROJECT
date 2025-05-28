@@ -8,6 +8,8 @@ from sklearn.model_selection import train_test_split
 import numpy as np
 from time import time
 from scipy import signal
+from imblearn.over_sampling import SMOTE
+from collections import Counter
 
 
 def load_config(path: str) -> Dict[str, Any]:
@@ -231,3 +233,36 @@ def load_graph(data_path: str, graph_path: str) -> tuple[torch.Tensor, torch.Ten
     edge_weight = torch.tensor(weights, dtype=torch.float32)
 
     return edge_index, edge_weight
+
+## SMOTE
+def apply_smote_to_eeg_dataset(eeg_dataset):
+    # Extract and flatten data
+    X = []
+    y = []
+    original_shape = None
+
+    for i in range(len(eeg_dataset)):
+        data, label = eeg_dataset[i]
+        if original_shape is None:
+            original_shape = data.shape
+        X.append(data.flatten())
+        y.append(label)
+
+    X = np.array(X)
+    y = np.array(y)
+
+    # Apply SMOTE
+    smote = SMOTE(random_state=42)
+    X_resampled, y_resampled = smote.fit_resample(X, y)
+
+    # Reshape X back to original EEG format
+    X_resampled = X_resampled.reshape(-1, *original_shape)
+
+    print("Resampled dataset shape %s" % Counter(y_resampled))
+
+    # Combine X and y back together as list of tuples
+    combined_dataset = list(
+        zip(torch.from_numpy(X_resampled), torch.from_numpy(y_resampled))
+    )
+
+    return combined_dataset

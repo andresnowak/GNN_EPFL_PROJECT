@@ -9,6 +9,7 @@ train_parquet_file: "train/segments_train.parquet"
 val_parquet_file: "train/segments_val.parquet"
 distances_csv_file: "distances_3d.csv"
 val_split_size: 0.1 # Proportion of training data to use for validation
+val_robust: True
 
 # --- Preprocessing Settings ---
 signal_processing:

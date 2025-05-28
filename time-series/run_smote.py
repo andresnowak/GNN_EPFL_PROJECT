@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import signal
+from imblearn.over_sampling import SMOTE as SMOTED
 
 from seiz_eeg.dataset import EEGDataset
 
@@ -16,7 +17,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 from torch_geometric.data import Data
 
 import torch
@@ -30,7 +31,7 @@ from sklearn.metrics import f1_score
 from tqdm import tqdm
 
 from src.smote import SMOTE
-from src.utils import load_config, load_eeg_data, load_graph
+from src.utils import load_config, load_eeg_data, load_graph, apply_smote_to_eeg_dataset
 from src.schedulers import LinearWarmupScheduler
 
 
@@ -59,14 +60,19 @@ seed_everything(1)
 
 def main(config: dict):
 
-    dataset_tr, dataset_val, train_df = load_eeg_data(config["data_path"], config["train_parquet_file"], config["val_parquet_file"], config["signal_processing"]["filtering_type"])
+    dataset_tr, dataset_val, train_df = load_eeg_data(config["data_path"], config["train_parquet_file"], config["val_parquet_file"], config["signal_processing"]["filtering_type"], robust=robust=config["val_robust"],)
+
+    if config["training"]["smote"]:
+        # Apply SMOTE to balance the training data
+        dataset_tr = apply_smote_to_eeg_dataset(dataset_tr)
+
 
     loader_tr = DataLoader(dataset_tr, batch_size=config["training"]["batch_size"], shuffle=True)
     loader_val = DataLoader(
         dataset_val, batch_size=config["training"]["batch_size"], shuffle=False
     )
 
-    """# Model"""
+    # Model
 
     # Set up device
     device = torch.device(
@@ -174,16 +180,17 @@ def main(config: dict):
             optimizer.zero_grad()
             loss.backward()
 
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
-
-            # Log total gradient norm
+            # Log total gradient norm (before clipping to really see what is happening with the model)
             total_norm = 0.0
             for p in model.parameters():
                 if p.grad is not None:
                     param_norm = p.grad.data.norm(2)
                     total_norm += param_norm.item() ** 2
             total_norm = total_norm**0.5
+
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
+
             wandb.log(
                 {
                     "grad_norm": total_norm,
