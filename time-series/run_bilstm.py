@@ -161,18 +161,16 @@ def main(config: dict):
             optimizer.zero_grad()
             loss.backward()
 
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
-
-            # Log total gradient norm
+            # Log total gradient norm (before clipping to really see what is happening with the model)
             total_norm = 0.0
             for p in model.parameters():
                 if p.grad is not None:
                     param_norm = p.grad.data.norm(2)
                     total_norm += param_norm.item() ** 2
             total_norm = total_norm**0.5
-            wandb.log({"grad_norm": total_norm, "global_step": global_step})
-            global_step += 1
+
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
 
             optimizer.step()
             running_loss += loss.item()
