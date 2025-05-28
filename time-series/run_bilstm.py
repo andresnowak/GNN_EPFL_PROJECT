@@ -31,6 +31,7 @@ from tqdm import tqdm
 
 from src.bilstm import BiLSTMClassifier
 from src.utils import load_config, load_eeg_data, load_graph, apply_smote_to_eeg_dataset
+from src.schedulers import LinearWarmupScheduler
 
 
 def seed_everything(seed: int):
@@ -142,9 +143,14 @@ def main(config: dict):
 
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
+    if config["training"]["lr_scheduler"]:
+        scheduler = LinearWarmupScheduler(
+            optimizer, config["training"]["warmup_ratio"], len(loader_tr) * epochs
+        )
 
     # Training loop
     best_acc = 0.0
+    best_f1 = 0.0
     ckpt_path = os.path.join(wandb.run.dir, config["checkpoint"]["best_model_filename"])
     print(f"Model path is: {ckpt_path}")
     global_step = 0
@@ -176,7 +182,19 @@ def main(config: dict):
             # Gradient clipping
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
 
+            wandb.log(
+                {
+                    "grad_norm": total_norm,
+                    "global_step": global_step,
+                    "lr_rate": optimizer.param_groups[0]["lr"],
+                }
+            )
+            global_step += 1
+
             optimizer.step()
+            if config["training"]["lr_scheduler"]:
+                scheduler.step()
+
             running_loss += loss.item()
 
         avg_loss = running_loss / len(loader_tr)
@@ -248,11 +266,10 @@ def main(config: dict):
         print(
             f"Epoch [{epoch + 1}/{epochs}], Validation Loss: {val_loss:.4f}, Valid accuracy: {val_acc:.4f}, Validation F1: {val_f1:.4f}"
         )
-        wandb.log({"val_loss": val_loss, "valid_accuracy": val_acc, "val_f1": val_f1, "epoch": epoch + 1})
+        wandb.log({"eval/loss": val_loss, "eval/accuracy": val_acc, "eval/f1": val_f1, "epoch": epoch + 1})
 
-        # Should we also use here f1 instead of accuracy?
-        # Save model if best accuracy so far
-        if val_acc > best_acc:
+        # Save model if best f1 so far
+        if val_f1 > best_f1:
             best_acc = val_acc
             torch.save(model.state_dict(), ckpt_path)
             print(
