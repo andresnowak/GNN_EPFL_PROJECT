@@ -263,9 +263,9 @@ def main(config: dict):
         )
         wandb.log(
             {
-                "eval_loss": val_loss,
-                "eval_accuracy": val_acc,
-                "eval_f1": val_f1,
+                "eval/loss": val_loss,
+                "eval/accuracy": val_acc,
+                "eval/f1": val_f1,
                 "epoch": epoch + 1,
             }
         )

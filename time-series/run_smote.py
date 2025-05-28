@@ -276,7 +276,7 @@ def main(config: dict):
         print(
             f"Epoch [{epoch + 1}/{epochs}], Validation Loss: {val_loss:.4f}, Valid accuracy: {val_acc:.4f}, Validation F1: {val_f1:.4f}"
         )
-        wandb.log({"eval_loss": val_loss, "eval_accuracy": val_acc, "eval_f1": val_f1, "epoch": epoch + 1})
+        wandb.log({"eval/loss": val_loss, "eval/accuracy": val_acc, "eval/f1": val_f1, "epoch": epoch + 1})
 
         # Should we also use here f1 instead of accuracy?
         # Save model if best accuracy so far
