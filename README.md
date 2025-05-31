@@ -1,3 +1,12 @@
+| Configuration  | Max F1 on Val Set | Wandb Config Name |
+| ------------- | ------------- | ------------- | 
+| GCN+LSTM, lr=2e-4, lstm=(64,3), gcn=(16,1), dropout=0.2   | 0.6741 |gcn-lstm: breezy-fire-43  | 
+| GCN+LSTM, lr=2e-4, lstm=(128,3), gcn=(16,1), dropout=0  | 0.7356 |gcn-lstm: efficient-cherry-42 | 
+| GCN+LSTM, lr=2e-4, lstm=(64,3), gcn=(16,1), dropout=0  | 0.7069 |gcn-lstm: hopeful-pond-41 | 
+| GCN+LSTM, lr=1e-4, lstm=(64,3), gcn=(16,1), dropout=0 | 0.6500 |gcn-lstm: leafy-sky-40  | 
+| GCN+LSTM, lr=2e-4, lstm=(64,3), gcn=(8,1), dropout=0  | 0.7168 |gcn-lstm: cool-eon-39 | 
+| GCN+LSTM, lr=1e-4, lstm=(64,3), gcn=(8,1), dropout=0  | 0.6514 |gcn-lstm: hearty-salad-38 | 
+
 # GNN_EPFL_PROJECT
 
 ### Train and Validation Set
