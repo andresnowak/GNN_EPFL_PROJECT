@@ -10,6 +10,7 @@ from time import time
 from scipy import signal
 from imblearn.over_sampling import SMOTE
 from collections import Counter
+import os
 
 
 def load_config(path: str) -> Dict[str, Any]:
@@ -24,6 +25,16 @@ def load_config(path: str) -> Dict[str, Any]:
         except yaml.YAMLError as e:
             raise ValueError(f"Error parsing YAML: {e}")
         
+def save_config(config, path: str, name: str):
+    # Define config file path
+    config_path = os.path.join(path, name)
+
+    # Save config as YAML
+    with open(config_path, "w") as f:
+        yaml.dump(
+            config, f, default_flow_style=False, sort_keys=False
+        )  # Preserve structure
+
 
 def load_eeg_data(
     data_path: str, train_path: str, val_path: str, filtering_type: str, robust: bool = False

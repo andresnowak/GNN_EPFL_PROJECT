@@ -30,7 +30,7 @@ from sklearn.metrics import f1_score
 from tqdm import tqdm
 
 from src.bilstm import BiLSTMClassifier
-from src.utils import load_config, load_eeg_data, load_graph, apply_smote_to_eeg_dataset
+from src.utils import load_config, load_eeg_data, load_graph, apply_smote_to_eeg_dataset, save_config
 from src.schedulers import LinearWarmupScheduler
 
 
@@ -119,6 +119,9 @@ def main(config: dict):
             "pos_weight": config["training"]["pos_weight"],
         },
     )
+
+    wandb_dir = wandb.run.dir  # Or use run.dir in older versions
+    save_config(config, wandb_dir, "bilstm.yaml")
 
     model = BiLSTMClassifier(
         input_dim = num_nodes,

@@ -30,7 +30,7 @@ from sklearn.metrics import f1_score
 from tqdm import tqdm
 
 from src.tgcn import TGCNWrapper
-from src.utils import load_config, load_eeg_data, load_graph, apply_smote_to_eeg_dataset
+from src.utils import load_config, load_eeg_data, load_graph, apply_smote_to_eeg_dataset, save_config
 
 
 def seed_everything(seed: int):
@@ -125,6 +125,9 @@ def main(config: dict):
             "pos_weight": config["training"]["pos_weight"],
         },
     )
+
+    wandb_dir = wandb.run.dir  # Or use run.dir in older versions
+    save_config(config, wandb_dir, "tgcn.yaml")
 
     model = TGCNWrapper(
         input_dim=input_dim,
