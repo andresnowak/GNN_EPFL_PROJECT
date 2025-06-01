@@ -166,10 +166,10 @@ def main(config: dict):
         running_loss = 0.0
 
         for x_batch, y_batch in loader_tr:
-            x_batch = x_batch.float().to(device).transpose(-2, -1).unsqueeze(-1)  # [batch_size, seq_len, num_nodes]
+            x_batch = x_batch.float().to(device).transpose(-2, -1).unsqueeze(-1)  # [batch_size, num_nodes, seq_len, 1]
             y_batch = y_batch.float().unsqueeze(1).to(device)
 
-            logits = model(x_batch, edge_index, edge_weight)
+            logits = model(x_batch, adjacency_matrix)
             loss = criterion(logits, y_batch)
 
             optimizer.zero_grad()
@@ -207,7 +207,7 @@ def main(config: dict):
                 x_batch = x_batch.float().to(device).transpose(-2, -1).unsqueeze(-1)
                 y_batch = y_batch.float().unsqueeze(1).to(device)
 
-                logits = model(x_batch, edge_index, edge_weight)
+                logits = model(x_batch, adjacency_matrix)
                 preds = torch.sigmoid(logits) >= 0.5
                 correct += (preds == y_batch.bool()).sum().item()
                 total += y_batch.size(0)
@@ -242,7 +242,7 @@ def main(config: dict):
                 x_batch = x_batch.float().to(device).transpose(-2, -1).unsqueeze(-1)
                 y_batch = y_batch.float().unsqueeze(1).to(device)
 
-                logits = model(x_batch, edge_index, edge_weight)
+                logits = model(x_batch, adjacency_matrix)
                 loss = criterion(logits, y_batch)
                 val_loss += loss.item()
 
@@ -263,9 +263,9 @@ def main(config: dict):
         )
         wandb.log(
             {
-                "eval_loss": val_loss,
-                "eval_accuracy": val_acc,
-                "eval_f1": val_f1,
+                "eval/loss": val_loss,
+                "eval/accuracy": val_acc,
+                "eval/f1": val_f1,
                 "epoch": epoch + 1,
             }
         )

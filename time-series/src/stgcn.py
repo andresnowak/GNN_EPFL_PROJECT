@@ -149,7 +149,7 @@ class STGCNClassifier(nn.Module):
         self.classifier = nn.Linear(64, num_classes)  # 64 from channels after conv
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, A_hat, X):
+    def forward(self, X, A_hat):
         """
         :param X: Input data of shape (batch_size, num_nodes, num_timesteps,
         num_features=in_channels).
@@ -157,13 +157,13 @@ class STGCNClassifier(nn.Module):
         """
         res_X = X
         out = self.block1(X, A_hat)
-        out += res_X
-        res_X = out
+        # out += res_X
+        # res_X = out
         out = self.block2(out, A_hat)
-        out += res_X
-        res_X = out
+        # out += res_X
+        # res_X = out
         out = self.last_temporal(out)  # shape: (B, N, T, C)
-        out += res_X
+        # out += res_X
         out = out.permute(0, 3, 1, 2)  # (B, C, N, T) for pooling
         out = self.pool(out)  # → (B, C, 1, 1)
         out = out.view(out.size(0), -1)  # → (B, C)
