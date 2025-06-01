@@ -155,6 +155,7 @@ def main(config: dict):
 
     # Training loop
     best_acc = 0.0
+    best_f1 = 0.0
     ckpt_path = os.path.join(wandb.run.dir, config["checkpoint"]["best_model_filename"])
     print(f"Model path is: {ckpt_path}")
     global_step = 0
@@ -216,7 +217,7 @@ def main(config: dict):
                 all_labels.extend(y_batch.cpu().numpy().flatten())
 
         train_acc = correct / total
-        train_f1 = f1_score(all_labels, all_preds)
+        train_f1 = f1_score(all_labels, all_preds, average="macro")
         print(f"Total training points: {total}")
         print(
             f"Epoch [{epoch + 1}/{epochs}], Train Loss: {avg_loss:.4f}, Train accuracy: {train_acc:.4f}, Train F1: {train_f1:.4f}"
@@ -255,7 +256,7 @@ def main(config: dict):
 
         val_acc = val_correct / val_total
         val_loss /= len(loader_val)
-        val_f1 = f1_score(all_labels, all_preds)
+        val_f1 = f1_score(all_labels, all_preds, average="macro")
         print(f"Total validation points: {val_total}")
 
         print(
@@ -272,11 +273,11 @@ def main(config: dict):
 
         # Should we also use here f1 instead of accuracy?
         # Save model if best accuracy so far
-        if val_acc > best_acc:
-            best_acc = val_acc
+        if val_f1 > best_f1:
+            best_f1 = val_f1
             torch.save(model.state_dict(), ckpt_path)
             print(
-                f"✅ New best model saved with accuracy: {val_acc:.4f} at epoch {epoch + 1}"
+                f"✅ New best model saved with f1: {val_f1:.4f} at epoch {epoch + 1}"
             )
 
     # Save the model
