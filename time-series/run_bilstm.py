@@ -270,10 +270,10 @@ def main(config: dict):
 
         # Save model if best f1 so far
         if val_f1 > best_f1:
-            best_acc = val_acc
+            best_f1 = val_f1
             torch.save(model.state_dict(), ckpt_path)
             print(
-                f"✅ New best model saved with accuracy: {val_acc:.4f} at epoch {epoch + 1}"
+                f"✅ New best model saved with f1: {val_f1:.4f} at epoch {epoch + 1}"
             )
 
     # Save the model
