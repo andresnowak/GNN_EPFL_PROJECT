@@ -29,8 +29,8 @@ import wandb
 from sklearn.metrics import f1_score
 from tqdm import tqdm
 
-from src.stgcn import STGCNClassifier, get_normalized_adj
-from src.utils import load_config, load_eeg_data, load_graph, apply_smote_to_eeg_dataset, save_config
+from src.stgcn import STGCNClassifier, get_normalized_adj, STGCNClassifier_2
+from src.utils import load_config, load_eeg_data, load_graph, apply_smote_to_eeg_dataset, save_config, AugmentedDataset
 import json
 
 
@@ -66,6 +66,7 @@ def main(config: dict):
     if config["training"]["smote"]:
         # Apply SMOTE to balance the training data
         dataset_tr = apply_smote_to_eeg_dataset(dataset_tr)
+    dataset_tr = AugmentedDataset(dataset_tr, config["training"]["augment"], config["training"]["augment_values"])
 
     loader_tr = DataLoader(
         dataset_tr, batch_size=config["training"]["batch_size"], shuffle=True
@@ -133,7 +134,7 @@ def main(config: dict):
     save_config(config, wandb_dir, "stgcn.yaml")
 
 
-    model = STGCNClassifier(
+    model = STGCNClassifier_2(
         num_nodes=num_nodes,
         num_features=input_dim,
         num_classes=number_of_classes

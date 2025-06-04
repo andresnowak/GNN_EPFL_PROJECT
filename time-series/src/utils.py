@@ -11,6 +11,7 @@ from scipy import signal
 from imblearn.over_sampling import SMOTE
 from collections import Counter
 import os
+import random
 
 
 def load_config(path: str) -> Dict[str, Any]:
@@ -277,3 +278,82 @@ def apply_smote_to_eeg_dataset(eeg_dataset):
     )
 
     return combined_dataset
+
+# ------ Augmentations --------
+
+def add_gaussian_noise(x, std=0.01):
+    noise = np.random.randn(*x.shape) * std
+    return x + noise
+
+
+def frequency_scaling(x, scale_range=(0.9, 1.1)):
+    scale = np.random.uniform(
+        *scale_range, size=(x.shape[0],)
+    )  # One scale per frequency
+    return x * scale[:, np.newaxis]  # Shape: (F, 1)
+
+def time_mask(x, max_mask_length=250):  # Adjust max_mask_length based on sampling rate
+    x = x.copy()
+    max_start = max(1, x.shape[0] - max_mask_length)
+    t0 = np.random.randint(0, max_start)
+    width = np.random.randint(1, min(max_mask_length, x.shape[0] - t0))
+    x[t0 : t0 + width, :] = 0
+    return x
+
+def frequency_mask(x, max_width=20):
+    x = x.copy()
+    max_start = max(1, x.shape[0] - max_width)
+    f0 = np.random.randint(0, max_start)
+    width = np.random.randint(1, min(max_width, x.shape[0] - f0))
+    x[f0 : f0 + width, :] = 0
+    return x
+
+
+def channel_amplitude_scaling(x, scale_range=(0.9, 1.1)):
+    scale = np.random.uniform(
+        *scale_range, size=(x.shape[1],)
+    )  # One scale per channel/node
+    return x * scale[np.newaxis, :]  # Shape: (1, N)
+
+
+def apply_augmentations(x, p_dict):
+    x_aug = x.copy()
+
+    if random.random() < p_dict.get("gaussian", 0.0):
+        x_aug = add_gaussian_noise(x_aug)
+
+    if random.random() < p_dict.get("freq_mask", 0.0):
+        x_aug = frequency_mask(x_aug)
+
+    if random.random() < p_dict.get("time_mask", 0.0):
+        x_aug = time_mask(x_aug)
+
+    if random.random() < p_dict.get("freq_scale", 0.0):
+        x_aug = frequency_scaling(x_aug)
+
+    if random.random() < p_dict.get("amp_scale", 0.0):
+        x_aug = channel_amplitude_scaling(x_aug)
+
+    return x_aug
+
+
+class AugmentedDataset(torch.utils.data.Dataset):
+    def __init__(self, base_dataset, augment=True, p_dict=None):
+        self.base_dataset = base_dataset
+        self.augment = augment
+        self.p_dict = p_dict or {
+            "gaussian": 0.5,
+            "freq_mask": 0.5,
+            "time_mask": 0.0,
+            "freq_scale": 0.5,
+            "amp_scale": 0.5,
+        }
+
+    def __len__(self):
+        return len(self.base_dataset)
+
+    def __getitem__(self, idx):
+        signal, label = self.base_dataset[idx]
+        if self.augment:
+            signal = apply_augmentations(signal, self.p_dict)
+        return signal, label
