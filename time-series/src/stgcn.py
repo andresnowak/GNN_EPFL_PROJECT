@@ -169,6 +169,51 @@ class STGCNClassifier(nn.Module):
         out = out.view(out.size(0), -1)  # → (B, C)
         out = self.classifier(out)  # → (B, 1)
         return out
+    
+
+class STGCNClassifier_2(nn.Module):
+    def __init__(self, num_nodes, num_features=1, num_classes=1):
+        super(STGCNClassifier_2, self).__init__()
+        self.block1 = STGCNBlock(
+            in_channels=num_features,
+            out_channels=64,
+            spatial_channels=16,
+            num_nodes=num_nodes,
+        )
+        self.block2 = STGCNBlock(
+            in_channels=64, out_channels=64, spatial_channels=16, num_nodes=num_nodes
+        )
+        self.last_temporal = TimeBlock(in_channels=64, out_channels=64)
+
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))  # (nodes, time) → (1, 1)
+
+        self.linear_1 = nn.Linear(64, 256)
+        self.linear_2 = nn.Linear(256, 128)
+        self.classifier = nn.Linear(128, num_classes)  # 64 from channels after conv
+
+    def forward(self, X, A_hat):
+        """
+        :param X: Input data of shape (batch_size, num_nodes, num_timesteps,
+        num_features=in_channels).
+        :param A_hat: Normalized adjacency matrix.
+        """
+        res_X = X
+        out = self.block1(X, A_hat)
+        # out += res_X
+        # res_X = out
+        out = self.block2(out, A_hat)
+        # out += res_X
+        # res_X = out
+        out = self.last_temporal(out)  # shape: (B, N, T, C)
+        # out += res_X
+        out = out.permute(0, 3, 1, 2)  # (B, C, N, T) for pooling
+        out = self.pool(out)  # → (B, C, 1, 1)
+        out = out.view(out.size(0), -1)  # → (B, C)
+
+        out = F.relu(self.linear_1(out))
+        out = F.relu(self.linear_2(out))
+        out = self.classifier(out)  # → (B, 1)
+        return out
 
 
 def get_normalized_adj(A):
