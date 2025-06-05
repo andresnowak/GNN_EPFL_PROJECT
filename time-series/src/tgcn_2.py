@@ -146,7 +146,13 @@ class TGCNClassifier(nn.Module):
 
         self.register_buffer("adj", torch.FloatTensor(adj))
         self.tgcn = TGCN(adj, hidden_dim)
-        self.classifier = nn.Sequential(nn.Linear(hidden_dim, num_classes))
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, num_classes),
+        )
 
     def forward(self, inputs):
         # inputs: (batch_size, seq_len, num_nodes)
