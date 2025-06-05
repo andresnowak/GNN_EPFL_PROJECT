@@ -42,6 +42,8 @@ training:
   lr_scheduler: False
   warmup_ratio: 0.1
   smote: False
+  augment_values: {"gaussian": 0.2, "freq_mask": 0.0, "time_mask": 0.2, "freq_scale": 0.0, "amp_scale": 0.2}
+  augment: False
 
 # --- Checkpoint Settings ---
 checkpoint:
