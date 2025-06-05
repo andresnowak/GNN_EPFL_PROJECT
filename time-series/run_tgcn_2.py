@@ -30,7 +30,7 @@ from sklearn.metrics import f1_score
 from tqdm import tqdm
 
 from src.tgcn_2 import TGCNClassifier
-from src.utils import load_config, load_eeg_data, load_graph, apply_smote_to_eeg_dataset, save_config
+from src.utils import load_config, load_eeg_data, load_graph, apply_smote_to_eeg_dataset, save_config, AugmentedDataset
 
 
 def seed_everything(seed: int):
@@ -65,6 +65,10 @@ def main(config: dict):
     if config["training"]["smote"]:
         # Apply SMOTE to balance the training data
         dataset_tr = apply_smote_to_eeg_dataset(dataset_tr)
+
+    dataset_tr = AugmentedDataset(
+        dataset_tr, config["training"]["augment"], config["training"]["augment_values"]
+    )
 
     loader_tr = DataLoader(
         dataset_tr, batch_size=config["training"]["batch_size"], shuffle=True

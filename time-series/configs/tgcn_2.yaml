@@ -13,7 +13,7 @@ val_robust: True
 
 # --- Preprocessing Settings ---
 signal_processing:
-  filtering_type: "frequency_domain"
+  filtering_type: "time_domain"
   bandpass_filter:
     order: 4
     lowcut: 0.5
@@ -36,6 +36,8 @@ training:
   pos_weight: True
   smote: False
   lr_scheduler: False
+  augment_values: {"gaussian": 0.3, "freq_mask": 0.0, "time_mask": 0.3, "freq_scale": 0.0, "amp_scale": 0.3}
+  augment: True
 
 # --- Checkpoint Settings ---
 checkpoint:
