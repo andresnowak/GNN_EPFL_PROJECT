@@ -1,0 +1,13 @@
+- [x] Check inference.py from sathvik to see about the node generation correctly
+    - Doing 1 / the distance because we want shorter distance higher weight.
+- [X] Change to do the transpose inside of the classes instead for the graph functions
+- [ ] For all models try frequency and time domain
+- [X] TGCN Fix
+    - TGCN finally runs but it is pretty slow, and maybe there is an error because for now it is not good
+- [ ] Maybe try the paper again after TGCN
+- [X] See about using SMOTE for the dataset maybe
+    - Already tried in the smote Resnet LSTM (it overfits since first 3 epochs)
+- [X] Try frequencey domain on Resnet with LSTM
+    - The Resnet with LSTM model (SMOTE) seems to overfit since the beggining using the frequency domain
+- [ ] Try SMOTE LSTM bidirectional
+- [X] Implement STGCN
