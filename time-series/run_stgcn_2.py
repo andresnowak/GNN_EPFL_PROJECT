@@ -134,7 +134,7 @@ def main(config: dict):
     save_config(config, wandb_dir, "stgcn.yaml")
 
 
-    model = STGCNClassifier(
+    model = STGCNClassifier_2(
         num_nodes=num_nodes,
         num_features=input_dim,
         num_classes=number_of_classes
