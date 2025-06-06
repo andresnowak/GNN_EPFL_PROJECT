@@ -11,6 +11,11 @@
 | GAT+LSTM, lr=2e-4, lstm=(64,3), gat=(16,1), dropout=0  | 0.6215 |gat-lstm: whole-snowball-8 | 
 | GAT+LSTM, lr=2e-4, lstm=(64,3), gat=(16,2), dropout=0  | 0.7017 |gat-lstm: happy-moon-9 | 
 | GAT+LSTM, lr=2e-4, lstm=(64,3), gat=(16,3), dropout=0  | 0.7205 |gat-lstm: deep-violet-10 | 
+| GAT2+LSTM, lr=2e-4, lstm=(64,3), gat=(16,2), dropout=0  | 0.6109 |gat2-lstm: polished-sponge-4 | 
+| GAT2+LSTM, lr=2e-4, lstm=(128,3), gat=(16,2), dropout=0  | 0.6206 |gat2-lstm: rose-darkness-5 | 
+| GAT2+LSTM, lr=2e-4, lstm=(128,3), gat=(16,2), dropout=0.2  | 0.6264 |gat2-lstm: treasured-eon-6 | 
+| GAT2+LSTM, lr=2e-4, lstm=(128,3), gat=(8,2), dropout=0.2  | 0.6299 |gat2-lstm: glowing-bird-7 | 
+
 
 # GNN_EPFL_PROJECT
 
