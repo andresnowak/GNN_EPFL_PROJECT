@@ -6,6 +6,11 @@
 | GCN+LSTM, lr=1e-4, lstm=(64,3), gcn=(16,1), dropout=0 | 0.6500 |gcn-lstm: leafy-sky-40  | 
 | GCN+LSTM, lr=2e-4, lstm=(64,3), gcn=(8,1), dropout=0  | 0.7168 |gcn-lstm: cool-eon-39 | 
 | GCN+LSTM, lr=1e-4, lstm=(64,3), gcn=(8,1), dropout=0  | 0.6514 |gcn-lstm: hearty-salad-38 | 
+| GAT+LSTM, lr=1e-4, lstm=(64,3), gat=(8,1), dropout=0  | 0.6430 |gat-lstm: gentle-gorge-6 | 
+| GAT+LSTM, lr=1e-4, lstm=(64,3), gat=(16,1), dropout=0  | 0.6556 |gat-lstm: bumbling-vortex-7 | 
+| GAT+LSTM, lr=2e-4, lstm=(64,3), gat=(16,1), dropout=0  | 0.6215 |gat-lstm: whole-snowball-8 | 
+| GAT+LSTM, lr=2e-4, lstm=(64,3), gat=(16,2), dropout=0  | 0.7017 |gat-lstm: happy-moon-9 | 
+| GAT+LSTM, lr=2e-4, lstm=(64,3), gat=(16,3), dropout=0  | 0.7205 |gat-lstm: deep-violet-10 | 
 
 # GNN_EPFL_PROJECT
 
