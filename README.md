@@ -15,6 +15,12 @@
 | GAT2+LSTM, lr=2e-4, lstm=(128,3), gat=(16,2), dropout=0  | 0.6206 |gat2-lstm: rose-darkness-5 | 
 | GAT2+LSTM, lr=2e-4, lstm=(128,3), gat=(16,2), dropout=0.2  | 0.6264 |gat2-lstm: treasured-eon-6 | 
 | GAT2+LSTM, lr=2e-4, lstm=(128,3), gat=(8,2), dropout=0.2  | 0.6299 |gat2-lstm: glowing-bird-7 | 
+| GCN2+LSTM, lr=2e-4, lstm=(64,3), gcn=(16,1), dropout=0  | 0.6712 |gcn2-lstm: giddy-gorge-1 |
+| GCN2+LSTM, lr=1e-4, lstm=(64,3), gcn=(16,1), dropout=0.2  | 0.6700 |gcn2-lstm: apricot-haze-2 |
+| GCN2+LSTM, lr=1e-4, lstm=(64,3), gcn=(8,1), dropout=0  | 0.5427 |gcn2-lstm: trim-elevator-3 |
+| GCN2+LSTM, lr=2e-4, lstm=(64,3), gcn=(8,1), dropout=0  | 0.6211 |gcn2-lstm: autumn-durian-4 |
+| GCN2+LSTM, lr=2e-4, lstm=(64,3), gcn=(16,1), dropout=0, norm_layers = False  | 0.6633 |gcn2-lstm: kind-lake-5 |
+
 
 
 # GNN_EPFL_PROJECT
