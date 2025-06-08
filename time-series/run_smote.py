@@ -127,7 +127,10 @@ def main(config: dict):
             "max_norm": max_norm,
             "warmup_ratio": config["training"]["warmup_ratio"] if config["training"]["lr_scheduler"] else None,
             "smote": config["training"]["smote"],
-            "pos_weight": config["training"]["pos_weight"]
+            "pos_weight": config["training"]["pos_weight"],
+            "augment": config["training"]["augment"],
+            "augment_values": config["training"]["augment_values"],
+            "val_robust": config["val_robust"],
         },
     )
 
