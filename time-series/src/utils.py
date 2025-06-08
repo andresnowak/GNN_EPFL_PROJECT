@@ -209,7 +209,7 @@ def load_eeg_val_data(
     return dataset_val
 
 
-def load_graph(data_path: str, graph_path: str) -> tuple[torch.Tensor, torch.Tensor]:
+def load_graph(data_path: str, graph_path: str, edge_distances_1: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
     data_path = "../data"  # we use relative path
     DATA_ROOT = Path(data_path)
 
@@ -235,7 +235,10 @@ def load_graph(data_path: str, graph_path: str) -> tuple[torch.Tensor, torch.Ten
                     (distances_df["from"] == nodes_names[i])
                     & (distances_df["to"] == nodes_names[j])
                 ]["distance"]
-                weights.append(1.0 / (nodes_distance.item() + epsilon) * constant) # we want smaller distances to have a higher weight
+                if edge_distances_1:
+                    weights.append(1.0)
+                else:
+                    weights.append(1.0 / (nodes_distance.item() + epsilon) * constant) # we want smaller distances to have a higher weight
             else:
                 weights.append(
                     1
@@ -293,7 +296,10 @@ def frequency_scaling(x, scale_range=(0.9, 1.1)):
     return x * scale[:, np.newaxis]  # Shape: (F, 1)
 
 def time_mask(x, max_mask_length=250):  # Adjust max_mask_length based on sampling rate
-    x = x.copy()
+    if isinstance(x, torch.Tensor):
+        x = x.clone()
+    else:
+        x = x.copy()
     max_start = max(1, x.shape[0] - max_mask_length)
     t0 = np.random.randint(0, max_start)
     width = np.random.randint(1, min(max_mask_length, x.shape[0] - t0))
@@ -301,7 +307,10 @@ def time_mask(x, max_mask_length=250):  # Adjust max_mask_length based on sampli
     return x
 
 def frequency_mask(x, max_width=20):
-    x = x.copy()
+    if isinstance(x, torch.Tensor):
+        x = x.clone()
+    else:
+        x = x.copy()
     max_start = max(1, x.shape[0] - max_width)
     f0 = np.random.randint(0, max_start)
     width = np.random.randint(1, min(max_width, x.shape[0] - f0))
@@ -317,8 +326,11 @@ def channel_amplitude_scaling(x, scale_range=(0.9, 1.1)):
 
 
 def apply_augmentations(x, p_dict):
-    x_aug = x.copy()
-
+    if isinstance(x, torch.Tensor):
+        x_aug = x.clone()
+    else:
+        x_aug = x.copy()
+        
     if random.random() < p_dict.get("gaussian", 0.0):
         x_aug = add_gaussian_noise(x_aug)
 
