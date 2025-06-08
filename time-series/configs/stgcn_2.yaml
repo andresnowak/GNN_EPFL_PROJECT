@@ -21,7 +21,7 @@ signal_processing:
     fs: 250
 
 model:
-  name: "STGCN" 
+  name: "STGCN_2" 
   num_eeg_channels: 19
   input_dim: 1
   num_classes: 1
@@ -38,6 +38,7 @@ training:
   lr_scheduler: False
   augment_values: {"gaussian": 0.3, "freq_mask": 0.0, "time_mask": 0.3, "freq_scale": 0.0, "amp_scale": 0.3}
   augment: True
+  edge_weights_1: false
 
 # --- Checkpoint Settings ---
 checkpoint:
