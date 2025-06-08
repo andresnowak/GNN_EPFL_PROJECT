@@ -42,11 +42,11 @@ training:
 # --- Checkpoint Settings ---
 checkpoint:
   save_dir_in_wandb: true # Saves checkpoints in wandb run directory
-  best_model_filename: "best_stgcn_2_model.pth"
-  final_model_filename: "final_stgcn_2_model.pth" # Note: script uses 'final_dtgcn_model.pth' but refers to SMOTE model
+  best_model_filename: "best_stgcn_3_model.pth"
+  final_model_filename: "final_stgcn_3_model.pth" # Note: script uses 'final_dtgcn_model.pth' but refers to SMOTE model
 
 # --- Weights & Biases Logging ---
 wandb:
   project: "eeg-DTGCN"
-  run_name: "STGCN_2"
+  run_name: "STGCN_3"
   log_gradients: true
