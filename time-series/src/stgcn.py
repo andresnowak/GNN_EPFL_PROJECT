@@ -216,6 +216,48 @@ class STGCNClassifier_2(nn.Module):
         return out
 
 
+class STGCNClassifier_AttnPool(nn.Module):
+    def __init__(self, num_nodes, num_features=1, num_classes=1):
+        super().__init__()
+        self.block1 = STGCNBlock(
+            in_channels=num_features,
+            out_channels=64,
+            spatial_channels=16,
+            num_nodes=num_nodes,
+        )
+        self.block2 = STGCNBlock(
+            in_channels=64, out_channels=64, spatial_channels=16, num_nodes=num_nodes
+        )
+        self.last_temporal = TimeBlock(in_channels=64, out_channels=64)
+
+        # attention scorer: maps each channel embedding → a scalar score
+        self.attn_scorer = nn.Conv2d(64, 1, kernel_size=1)  
+
+        self.linear_1 = nn.Linear(64, 256)
+        self.linear_2 = nn.Linear(256, 128)
+        self.classifier = nn.Linear(128, num_classes)  # 64 from channels after conv
+
+    def forward(self, X, A_hat):
+        # X: (B, N, T, F)
+        out = self.block1(X, A_hat)         # (B, N, T', C)
+        out = self.block2(out, A_hat)       # (B, N, T'', C)
+        out = self.last_temporal(out)       # (B, N, T''', C)
+
+        # bring to (B, C, N, T) for conv
+        z = out.permute(0, 3, 1, 2)         # (B, C, N, T)
+        # compute attention scores per node+time
+        scores = self.attn_scorer(z)        # (B, 1, N, T)
+        weights = torch.softmax(scores.view(z.size(0), -1), dim=1)
+        weights = weights.view_as(scores)   # (B,1,N,T)
+
+        # weighted sum: broadcast weights over channels
+        z_weighted = (z * weights).sum(dim=[2,3])  # (B, C)
+        out = F.relu(self.linear_1(z_weighted))
+        out = F.relu(self.linear_2(out))
+        out = self.classifier(out) # (B, num_classes)
+        return out 
+
+
 def get_normalized_adj(A):
     """
     Returns the degree normalized adjacency matrix.
