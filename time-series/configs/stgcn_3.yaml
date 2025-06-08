@@ -21,7 +21,7 @@ signal_processing:
     fs: 250
 
 model:
-  name: "STGCN" 
+  name: "STGCN_3" 
   num_eeg_channels: 19
   input_dim: 1
   num_classes: 1
