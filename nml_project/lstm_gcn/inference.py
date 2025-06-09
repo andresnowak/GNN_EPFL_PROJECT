@@ -3,14 +3,24 @@ import torch
 from scipy import signal
 from seiz_eeg.dataset import EEGDataset
 import numpy as np
-from models import LSTM_GAT
+import sys
+import os
+script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.join(script_dir, '..'))
+from models import LSTM_GCN
 import pandas as pd
 from pathlib import Path
 import re
+import argparse
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-DATA_ROOT_TEST = Path("/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/data/test")
+parser = argparse.ArgumentParser(description="Run inference on the LSTM-GCN model.")
+parser.add_argument('--model', type=str, required=True, help='Model path')
+args = parser.parse_args()
+model_path = args.model
+
+DATA_ROOT_TEST = Path(os.path.join(script_dir, "..", "data", "test"))
 clips_te = pd.read_parquet(DATA_ROOT_TEST / "test/segments.parquet")
 
 bp_filter = signal.butter(4, (0.5, 30), btype="bandpass", output="sos", fs=250)
@@ -30,11 +40,11 @@ def fft_filtering(x: np.ndarray) -> np.ndarray:
 
 # Create test dataset
 dataset_te = EEGDataset(
-    clips_te,  # Your test clips variable
-    signals_root=DATA_ROOT_TEST / "test",  # Update this path if your test signals are stored elsewhere
-    signal_transform=fft_filtering,  # You can change or remove the signal_transform as needed
-    prefetch=True,  # Set to False if prefetching causes memory issues on your compute environment
-    return_id=True,  # Return the id of each sample instead of the label
+    clips_te,
+    signals_root=DATA_ROOT_TEST / "test",
+    signal_transform=fft_filtering,
+    prefetch=True,
+    return_id=True,
 )
 
 # Create DataLoader for the test dataset
@@ -65,12 +75,12 @@ edges = [
 node_idx = {node: i for i, node in enumerate(nodes)}
 
 # Load distances
-dist_df = pd.read_csv('/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/distances_3d.csv')
+dist_df = pd.read_csv(os.path.join(script_dir, '..', 'distances_3d.csv'))
 distance_dict = {}
 
 for _, row in dist_df.iterrows():
     key1 = (row['from'], row['to'])
-    key2 = (row['to'], row['from'])  # ensure symmetry
+    key2 = (row['to'], row['from'])
     distance_dict[key1] = row['distance']
     distance_dict[key2] = row['distance']
 
@@ -79,7 +89,7 @@ edge_weights = []
 edge_index = []
 
 for u, v in edges:
-    dist = distance_dict.get((u, v), 1.0)  # fallback if missing
+    dist = distance_dict.get((u, v), 1.0)
     weight = 1.0 / (dist + epsilon)
     edge_weights.append(weight)  # u→v
     edge_weights.append(weight)  # v→u
@@ -91,68 +101,40 @@ edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous().to(devi
 
 lstm_hidden_dim = 128
 lstm_num_layers = 3
-gat_hidden = 256
-gat_out = 256
-num_heads = 4
+gcn_hidden = 256
+gcn_out = 256
 dropout = 0.2
-normalization = False
 
-run_name = 'run-20250526_155620-vcucg9r9'
-dir = f'/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/wandb/{run_name}/files'
-model = LSTM_GAT(lstm_hidden_dim, lstm_num_layers, gat_hidden, gat_out, num_heads, dropout).to(device) 
-model.load_state_dict(torch.load(f"{dir}/best_lstm_gat_model.pth"))  # Load the trained model weights
+model = LSTM_GCN(lstm_hidden_dim, lstm_num_layers, gcn_hidden, gcn_out, dropout).to(device) 
+model.load_state_dict(torch.load(model_path))
 model.to(device)
 model.eval()
+print("Model loaded successfully and set to evaluation mode.")
 
-# Lists to store sample IDs and predictions
 all_predictions = []
 all_ids = []
 
+print(f"Starting inference on {len(dataset_te)} samples...")
+
 def clean_underscores(s):
-    # Step 1: Replace all double underscores (or more) with a temporary marker
     s = re.sub(r'__+', lambda m: '<<UND>>' * (len(m.group()) // 2), s)
-
-    # Step 2: Remove remaining single underscores
     s = re.sub(r'_', '', s)
-
-    # Step 3: Replace all temporary markers back with a single underscore each
     s = s.replace('<<UND>>', '_')
-
     return s
 
-if normalization:
-    normalization_stats = torch.load(f'{dir}/normalization_stats.pth')
-    global_min = normalization_stats["global_min"]
-    global_max = normalization_stats["global_max"]
-    epsilon = 1e-8
-
-# Disable gradient computation for inference
 with torch.no_grad():
-    for batch in loader_te:
-        # Assume each batch returns a tuple (x_batch, sample_id)
-        # If your dataset does not provide IDs, you can generate them based on the batch index.
+    for i, batch in enumerate(loader_te):
+        if (i + 1) % 10 == 0:
+            print(f"Processing batch {i + 1}/{len(loader_te)}")
         x_batch, x_ids = batch
-        x_ids = [clean_underscores(x_id) for x_id in x_ids]  # Clean the IDs
-
-        # Move the input data to the device (GPU or CPU)
+        x_ids = [clean_underscores(x_id) for x_id in x_ids]
         x_batch = x_batch.float().to(device)
-        if normalization:
-            x_batch = 2 * (x_batch - global_min) / (global_max - global_min + epsilon) - 1
-
-        # Perform the forward pass to get the model's output logits
         logits = model(x_batch, edge_index, edge_weight)
-
-        # Convert logits to predictions.
-        # For binary classification, threshold logits at 0 (adjust this if you use softmax or multi-class).
         predictions = (torch.sigmoid(logits) >= 0.5).int().cpu().numpy()
-
-        # Append predictions and corresponding IDs to the lists
         all_predictions.extend(predictions.flatten().tolist())
         all_ids.extend(list(x_ids))
 
-# Create a DataFrame for Kaggle submission with the required format: "id,label"
+print("Inference complete. Generating submission file...")
 submission_df = pd.DataFrame({"id": all_ids, "label": all_predictions})
-
-# Save the DataFrame to a CSV file without an index
-submission_df.to_csv(f"{dir}/submission_{run_name}.csv", index=False)
-print("Kaggle submission file generated: submission.csv")
+submission_df.to_csv(os.path.join(script_dir, "submission.csv"), index=False)
+print(f"Submission file saved as {os.path.join(script_dir, 'submission.csv')}")

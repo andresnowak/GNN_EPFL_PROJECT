@@ -1,78 +1,42 @@
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import signal
-
 from seiz_eeg.dataset import EEGDataset
-
 import os
 import random
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
-
 import wandb
-
 from sklearn.metrics import f1_score
-
+import sys
+script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.join(script_dir, '..'))
 from models import GAT
 
+log_wandb = False
+
 def seed_everything(seed: int):
-    # Python random module
     random.seed(seed)
-    # Numpy random module
     np.random.seed(seed)
-    # Torch random seeds
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU.
-
-    # Set PYTHONHASHSEED environment variable for hash-based operations
+    torch.cuda.manual_seed_all(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
-
-    # Ensure deterministic behavior in cudnn (may slow down your training)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-
 seed_everything(1)
 
-
-"""# The data
-
-We model *segments* of brain activity, which correspond to windows of a longer *session* of EEG recording.
-
-These segments, and their labels, are described in the `segments.parquet` files, which can be directly loaded with `pandas`.
-"""
-
-# You might need to change this according to where you store the data folder
-# Inside your data folder, you should have the following structure:
-# data
-# ├── train
-# │   ├── signals/
-# │   ├── segments.parquet
-# │-- test
-#     ├── signals/
-#     ├── segments.parquet
-
-data_path = "/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project"
+data_path = Path(os.path.join(script_dir, ".."))
 DATA_ROOT = Path(data_path)
 clips_tr = pd.read_parquet(DATA_ROOT / "segments_train.parquet")
 clips_va = pd.read_parquet(DATA_ROOT / "segments_val.parquet")
 
-"""## Loading the signals
-
-For convenience, the `EEGDataset class` provides functionality for loading each segment and its label as `numpy` arrays.
-
-You can provide an optional `signal_transform` function to preprocess the signals. In the example below, we have two bandpass filtering functions, which extract frequencies between 0.5Hz and 30Hz which are used in seizure analysis literature:
-
-The `EEGDataset` class also allows to load all data in memory, instead of reading it from disk at every iteration. If your compute allows it, you can use `prefetch=True`.
-"""
 bp_filter = signal.butter(4, (0.5, 30), btype="bandpass", output="sos", fs=250)
 
 def time_filtering(x: np.ndarray) -> np.ndarray:
@@ -101,11 +65,6 @@ dataset_val = EEGDataset(
     signal_transform=fft_filtering,
     prefetch=True,
 )
-
-"""## Compatibility with PyTorch
-
-The `EEGDataset` class is compatible with [pytorch datasets and dataloaders](https://pytorch.org/tutorials/beginner/basics/data_tutorial.html), which allow you to load batched data.
-"""
 
 batch_size = 64
 loader_tr = DataLoader(dataset_tr, batch_size=batch_size, shuffle=True)
@@ -140,12 +99,12 @@ edges = [
 node_idx = {node: i for i, node in enumerate(nodes)}
 
 # Load distances
-dist_df = pd.read_csv('/work/cvlab/students/bhagavan/GNN_EPFL_PROJECT/nml_project/distances_3d.csv')
+dist_df = pd.read_csv(os.path.join(script_dir, '..', 'distances_3d.csv'))
 distance_dict = {}
 
 for _, row in dist_df.iterrows():
     key1 = (row['from'], row['to'])
-    key2 = (row['to'], row['from'])  # ensure symmetry
+    key2 = (row['to'], row['from'])
     distance_dict[key1] = row['distance']
     distance_dict[key2] = row['distance']
     
@@ -154,7 +113,7 @@ edge_weights = []
 edge_index = []
 
 for u, v in edges:
-    dist = distance_dict.get((u, v), 1.0)  # fallback if missing
+    dist = distance_dict.get((u, v), 1.0)
     weight = 1.0 / (dist + epsilon)
     edge_weights.append(weight)  # u→v
     edge_weights.append(weight)  # v→u
@@ -175,42 +134,53 @@ dropout = 0.2
 weighted_loss = True
 gradient_clip = True
 normalization = False
+learn_rate_scheduler = False
 
 # Initialize Weights and Biases
-wandb.init(project="eeg-gat", config={
-    "epochs": epochs,
-    "batch_size": batch_size,
-    "lr": lr,
-    "weight_decay": weight_decay,
-    "model": "gat",
-    "gat_input": gat_input,
-    "gat_hidden": gat_hidden,
-    "gat_out": gat_out,
-    "num_heads": num_heads,
-    "dropout": dropout,
-    "weighted_loss": weighted_loss,
-    "gradient_clip": gradient_clip,
-    "normalization": normalization,
-})
+if log_wandb:
+    wandb.init(project="eeg-gat", config={
+        "epochs": epochs,
+        "batch_size": batch_size,
+        "lr": lr,
+        "weight_decay": weight_decay,
+        "model": "gat",
+        "gat_input": gat_input,
+        "gat_hidden": gat_hidden,
+        "gat_out": gat_out,
+        "num_heads": num_heads,
+        "dropout": dropout,
+        "weighted_loss": weighted_loss,
+        "gradient_clip": gradient_clip,
+        "normalization": normalization,
+        "learn_rate_scheduler": learn_rate_scheduler,
+    })
+    print("WandB initialized successfully.")
 
-model = GAT(gat_input, gat_hidden, gat_out, num_heads, dropout).to(device)  # binary classification
+model = GAT(gat_input, gat_hidden, gat_out, num_heads, dropout).to(device)
 print('Number of trainable parameters:', sum(p.numel() for p in model.parameters() if p.requires_grad))
+print('Number of parameters in GAT:', sum(p.numel() for p in model.gat1.parameters() if p.requires_grad) + sum(p.numel() for p in model.gat2.parameters() if p.requires_grad) + sum(p.numel() for p in model.gat3.parameters() if p.requires_grad))
+print("Model initialized. Starting training...")
 
 if weighted_loss:
     label_counts = clips_tr['label'].value_counts()
     neg, pos = label_counts[0], label_counts[1]
     pos_weight = torch.tensor([neg / pos], dtype=torch.float32).to(device)
-    wandb.config.pos_weight = pos_weight
+    if log_wandb:
+        wandb.config.pos_weight = pos_weight
     print(f"Using pos_weight={pos_weight.item():.4f} for class imbalance correction.")
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 else:
     criterion = nn.BCEWithLogitsLoss()
 optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+if learn_rate_scheduler:
+    scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.1, total_iters=epochs)
 
 # Training loop
 best_f1 = 0.0
-ckpt_path = os.path.join(wandb.run.dir, "best_gat_model.pth")
-print(f'Model path is: {ckpt_path}')
+if log_wandb:
+    ckpt_path = os.path.join(wandb.run.dir, "best_gat_model.pth")
+else:
+    ckpt_path = os.path.join(script_dir, "best_gat_model.pth")
 global_step = 0
 global_min = float('inf')
 global_max = float('-inf')
@@ -227,14 +197,20 @@ if normalization:
         "global_min": global_min,
         "global_max": global_max
     }
-    torch.save(normalization_stats, os.path.join(wandb.run.dir, "normalization_stats.pth"))
+    if log_wandb:
+        torch.save(normalization_stats, os.path.join(wandb.run.dir, "normalization_stats.pth"))
+    else:
+        torch.save(normalization_stats, os.path.join(script_dir, "normalization_stats.pth"))
     epsilon = 1e-8
 
+print("Starting training loop...")
 for epoch in range(epochs):
     model.train()
     running_loss = 0.0
     
-    for x_batch, y_batch in loader_tr:
+    for i, (x_batch, y_batch) in enumerate(loader_tr):
+        if (i + 1) % 20 == 0:
+            print(f"Training batch {i + 1}/{len(loader_tr)}")
         x_batch = x_batch.float().to(device)
         y_batch = y_batch.float().unsqueeze(1).to(device)
         if normalization:
@@ -257,7 +233,8 @@ for epoch in range(epochs):
                 param_norm = p.grad.data.norm(2)
                 total_norm += param_norm.item() ** 2
         total_norm = total_norm ** 0.5
-        wandb.log({"grad_norm": total_norm, "global_step": global_step})
+        if log_wandb:
+            wandb.log({"grad_norm": total_norm, "global_step": global_step})
         global_step += 1
 
         optimizer.step()
@@ -289,7 +266,8 @@ for epoch in range(epochs):
     train_f1 = f1_score(train_labels, train_preds, average='macro')
     print(f'Total training points: {total}')
     print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {avg_loss:.4f}, Train accuracy: {train_acc:.4f}, Train F1: {train_f1:.4f}")
-    wandb.log({"train_loss": avg_loss, "train_accuracy": train_acc, "train_f1": train_f1, "epoch": epoch + 1})
+    if log_wandb:
+        wandb.log({"train_loss": avg_loss, "train_accuracy": train_acc, "train_f1": train_f1, "epoch": epoch + 1})
     
     val_correct = 0
     val_total = 0
@@ -297,7 +275,9 @@ for epoch in range(epochs):
     val_preds = []
     val_labels = []
     with torch.no_grad():
-        for x_batch, y_batch in loader_val:
+        for i, (x_batch, y_batch) in enumerate(loader_val):
+            if (i + 1) % 20 == 0:
+                print(f"Validation batch {i + 1}/{len(loader_val)}")
             x_batch = x_batch.float().to(device)
             if normalization:
                 x_batch = 2 * (x_batch - global_min) / (global_max - global_min + epsilon) - 1
@@ -318,15 +298,27 @@ for epoch in range(epochs):
     val_loss /= len(loader_val)
     print(f'Total validation points: {val_total}')
     print(f"Epoch [{epoch+1}/{epochs}], Validation Loss: {val_loss:.4f}, Valid accuracy: {val_acc:.4f}, Valid F1: {val_f1:.4f}")
-    wandb.log({"val_loss": val_loss, "val_accuracy": val_acc, "val_f1": val_f1, "epoch": epoch + 1})
+    if log_wandb:
+        wandb.log({"val_loss": val_loss, "val_accuracy": val_acc, "val_f1": val_f1, "epoch": epoch + 1})
     
-    # Save model if best accuracy so far
+    # Save model if best F1 so far
     if val_f1 > best_f1:
         best_f1 = val_f1
         torch.save(model.state_dict(), ckpt_path)
         print(f"✅ New best model saved with F1: {val_f1:.4f} at epoch {epoch+1}")
 
-# Save the model
-torch.save(model.state_dict(), os.path.join(wandb.run.dir, "final_gat_model.pth"))
+    if learn_rate_scheduler:
+        scheduler.step()
+        if log_wandb:
+            wandb.log({"learning_rate": optimizer.param_groups[0]['lr'], "epoch": epoch + 1})
 
-wandb.finish()
+# Save the model
+if log_wandb:
+    torch.save(model.state_dict(), os.path.join(wandb.run.dir, "final_gat_model.pth"))
+else:
+    torch.save(model.state_dict(), os.path.join(script_dir, "final_gat_model.pth"))
+print("Training complete. Final model saved.")
+
+if log_wandb:
+    wandb.finish()
+    print("WandB run finished.")
