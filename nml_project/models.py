@@ -5,6 +5,7 @@ from torch_geometric.nn import GCNConv, GATConv, GraphNorm, global_mean_pool, Tr
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.transforms import AddLaplacianEigenvectorPE
+from collections import deque
 
 import sys
 sys.path.append("/path/to/state-spaces")
@@ -645,3 +646,1087 @@ class S4_GAT(nn.Module):
         out = global_mean_pool(h, batch.batch)
         
         return self.classifier(out)
+    
+# ---- resnet_lstm -----
+
+
+class ResNetBlock1D(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=7, stride=1):
+        super(ResNetBlock1D, self).__init__()
+        self.conv1 = nn.Conv1d(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=(kernel_size - 1) // 2,
+            bias=False,
+        )
+        self.bn1 = nn.BatchNorm1d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+
+        # Second convolution kernel size is 7, stride 1, as per Table 2 Tconv2 for each ResNet block
+        self.conv2 = nn.Conv1d(
+            out_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=(kernel_size - 1) // 2,
+            bias=False,
+        )
+        self.bn2 = nn.BatchNorm1d(out_channels)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv1d(
+                    in_channels, out_channels, kernel_size=1, stride=stride, bias=False
+                ),
+                nn.BatchNorm1d(out_channels),
+            )
+
+    def forward(self, x):
+        residual = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        out += self.shortcut(residual) # residual
+        out = self.relu(out)
+
+        return out
+
+
+class SMOTE(nn.Module):
+    def __init__(
+        self,
+        num_eeg_channels=21,
+        initial_filters=16,
+        resnet_kernel_size=7,
+        lstm_hidden_size=220,
+        fc1_units=110,
+        num_classes=8,
+    ):
+        super(SMOTE, self).__init__()
+
+        # Initial Temporal Convolution (Tconv from Figure 3, Table 2)
+        # Paper Table 2 Tconv: kernel 1x7/1, 16 filters.
+        # Output 21x500x16. Interpreting as Conv1D(21, 16, k=7, s=1)
+        self.tconv = nn.Sequential(
+            nn.Conv1d(
+                num_eeg_channels,
+                initial_filters,
+                kernel_size=resnet_kernel_size,
+                stride=1,
+                padding=(resnet_kernel_size - 1) // 2,
+                bias=False,
+            ),
+            nn.BatchNorm1d(initial_filters),
+            nn.ReLU(inplace=True),
+        )
+
+        # 1D ResNet Module (MODULE 1 from Table 2)
+        # ResNet1: 16 filters, stride 1 (first conv in block)
+        self.resnet1 = ResNetBlock1D(
+            initial_filters, initial_filters, kernel_size=resnet_kernel_size, stride=1
+        )
+        # ResNet2: 32 filters, stride 2 (first conv in block)
+        current_filters = initial_filters
+        self.resnet2 = ResNetBlock1D(
+            current_filters,
+            current_filters * 2,
+            kernel_size=resnet_kernel_size,
+            stride=2,
+        )
+        current_filters *= 2  # 32
+        # ResNet3: 64 filters, stride 2
+        self.resnet3 = ResNetBlock1D(
+            current_filters,
+            current_filters * 2,
+            kernel_size=resnet_kernel_size,
+            stride=2,
+        )
+        current_filters *= 2  # 64
+        # ResNet4: 128 filters, stride 2
+        self.resnet4 = ResNetBlock1D(
+            current_filters,
+            current_filters * 2,
+            kernel_size=resnet_kernel_size,
+            stride=2,
+        )
+        current_filters *= 2  # 128
+
+        # Average Pooling (Table 2)
+        # Stride /2
+        self.avg_pool = nn.AvgPool1d(
+            kernel_size=2, stride=2
+        )  # Matches stride /2 in table for final downsample
+
+        # LSTM Module (MODULE 2 from Table 2)
+        # LSTM nodes L=220
+        # Input to LSTM: after ResNet4 (128 filters) and AvgPool
+        # The features for LSTM are the channels from Conv layers
+        self.lstm_input_features = current_filters
+        self.lstm = nn.LSTM(
+            input_size=self.lstm_input_features,
+            hidden_size=lstm_hidden_size,
+            num_layers=1,
+            batch_first=True,
+        )
+
+        # Classification Module (MODULE 3 from Table 2)
+        # FC1: 110 units
+        self.fc1 = nn.Linear(lstm_hidden_size, fc1_units)
+        self.relu_fc1 = nn.ReLU(inplace=True)
+        # FC2: 8 units (num_classes)
+        self.fc2 = nn.Linear(fc1_units, num_classes)
+
+    def forward(self, x):
+        """
+        Args:
+            x (torch.Tensor): shape: (batch_size, time_steps, num_eeg_channels) e.g., (B, 500, 21)
+        """
+
+        x = x.transpose(-2, -1) # to have [B, num_channels, timesteps]
+
+        # Initial Tconv
+        x = self.tconv(x)  # (B, 16, 500)
+
+        # 1D ResNet Module
+        x = self.resnet1(x)  # (B, 16, 500)
+        x = self.resnet2(x)  # (B, 32, 250)
+        x = self.resnet3(x)  # (B, 64, 125)
+        x = self.resnet4(x)  # (B, 128, 63)
+
+        # Average Pooling
+        x = self.avg_pool(x)  # (B, 128, 31)
+
+        # Prepare for LSTM
+        # LSTM expects (batch, seq_len, features)
+        # Current x: (batch, features, seq_len)
+        x = x.permute(0, 2, 1)  # (B, 31, 128)
+        # supppsoedly in the paper they first flatten and then do a reshape, but i don't understand why do a flattening?
+
+        # LSTM
+        # lstm_out contains all hidden states for all time steps
+        # h_n contains the final hidden state: (num_layers, batch, hidden_size)
+        lstm_out, (h_n, c_n) = self.lstm(x)
+
+        # We take the last hidden state from the sequence (or h_n)
+        # If using lstm_out:
+        # x = lstm_out[:, -1, :] # (B, lstm_hidden_size)
+        # If using h_n (more common for classification):
+        x = h_n.squeeze(0)  # (B, lstm_hidden_size), assuming num_layers=1
+
+        # Classification Module
+        x = self.fc1(x)
+        x = self.relu_fc1(x)
+        x = self.fc2(x)  # (B, num_classes)
+
+        return x
+
+
+class SMOTE_BI(nn.Module):
+    def __init__(
+        self,
+        num_eeg_channels=21,
+        initial_filters=16,
+        resnet_kernel_size=7,
+        lstm_hidden_size=220,
+        fc1_units=110,
+        num_classes=8,
+    ):
+        super(SMOTE, self).__init__()
+
+        # Initial Temporal Convolution (Tconv from Figure 3, Table 2)
+        # Paper Table 2 Tconv: kernel 1x7/1, 16 filters.
+        # Output 21x500x16. Interpreting as Conv1D(21, 16, k=7, s=1)
+        self.tconv = nn.Sequential(
+            nn.Conv1d(
+                num_eeg_channels,
+                initial_filters,
+                kernel_size=resnet_kernel_size,
+                stride=1,
+                padding=(resnet_kernel_size - 1) // 2,
+                bias=False,
+            ),
+            nn.BatchNorm1d(initial_filters),
+            nn.ReLU(inplace=True),
+        )
+
+        # 1D ResNet Module (MODULE 1 from Table 2)
+        # ResNet1: 16 filters, stride 1 (first conv in block)
+        self.resnet1 = ResNetBlock1D(
+            initial_filters, initial_filters, kernel_size=resnet_kernel_size, stride=1
+        )
+        # ResNet2: 32 filters, stride 2 (first conv in block)
+        current_filters = initial_filters
+        self.resnet2 = ResNetBlock1D(
+            current_filters,
+            current_filters * 2,
+            kernel_size=resnet_kernel_size,
+            stride=2,
+        )
+        current_filters *= 2  # 32
+        # ResNet3: 64 filters, stride 2
+        self.resnet3 = ResNetBlock1D(
+            current_filters,
+            current_filters * 2,
+            kernel_size=resnet_kernel_size,
+            stride=2,
+        )
+        current_filters *= 2  # 64
+        # ResNet4: 128 filters, stride 2
+        self.resnet4 = ResNetBlock1D(
+            current_filters,
+            current_filters * 2,
+            kernel_size=resnet_kernel_size,
+            stride=2,
+        )
+        current_filters *= 2  # 128
+
+        # Average Pooling (Table 2)
+        # Stride /2
+        self.avg_pool = nn.AvgPool1d(
+            kernel_size=2, stride=2
+        )  # Matches stride /2 in table for final downsample
+
+        # LSTM Module (MODULE 2 from Table 2)
+        # LSTM nodes L=220
+        # Input to LSTM: after ResNet4 (128 filters) and AvgPool
+        # The features for LSTM are the channels from Conv layers
+        self.lstm_input_features = current_filters
+        self.lstm = nn.LSTM(
+            input_size=self.lstm_input_features,
+            hidden_size=lstm_hidden_size,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=True,
+        )
+
+        # Classification Module (MODULE 3 from Table 2)
+        # FC1: 110 units
+        self.fc1 = nn.Linear(lstm_hidden_size, fc1_units)
+        self.relu_fc1 = nn.ReLU(inplace=True)
+        # FC2: 8 units (num_classes)
+        self.fc2 = nn.Linear(fc1_units, num_classes)
+
+    def forward(self, x):
+        """
+        Args:
+            x (torch.Tensor): shape: (batch_size, time_steps, num_eeg_channels) e.g., (B, 500, 21)
+        """
+
+        x = x.transpose(-2, -1)  # to have [B, num_channels, timesteps]
+
+        # Initial Tconv
+        x = self.tconv(x)  # (B, 16, 500)
+
+        # 1D ResNet Module
+        x = self.resnet1(x)  # (B, 16, 500)
+        x = self.resnet2(x)  # (B, 32, 250)
+        x = self.resnet3(x)  # (B, 64, 125)
+        x = self.resnet4(x)  # (B, 128, 63)
+
+        # Average Pooling
+        x = self.avg_pool(x)  # (B, 128, 31)
+
+        # Prepare for LSTM
+        # LSTM expects (batch, seq_len, features)
+        # Current x: (batch, features, seq_len)
+        x = x.permute(0, 2, 1)  # (B, 31, 128)
+        # supppsoedly in the paper they first flatten and then do a reshape, but i don't understand why do a flattening?
+
+        # LSTM
+        # lstm_out contains all hidden states for all time steps
+        # h_n contains the final hidden state: (num_layers, batch, hidden_size)
+        lstm_out, (h_n, c_n) = self.lstm(x)
+        h_n = h_n.mean(dim=0)
+
+        # We take the last hidden state from the sequence (or h_n)
+        # If using lstm_out:
+        # x = lstm_out[:, -1, :] # (B, lstm_hidden_size)
+        # If using h_n (more common for classification):
+        x = h_n.squeeze(0)  # (B, lstm_hidden_size), assuming num_layers=1
+
+        # Classification Module
+        x = self.fc1(x)
+        x = self.relu_fc1(x)
+        x = self.fc2(x)  # (B, num_classes)
+
+        return x
+
+# ---- stgcn -----
+
+# Code obtained from https://github.com/FelixOpolka/STGCN-PyTorch
+
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+
+
+class TimeBlock(nn.Module):
+    """
+    Neural network block that applies a temporal convolution to each node of
+    a graph in isolation.
+    """
+
+    def __init__(self, in_channels, out_channels, kernel_size=3):
+        """
+        :param in_channels: Number of input features at each node in each time
+        step.
+        :param out_channels: Desired number of output channels at each node in
+        each time step.
+        :param kernel_size: Size of the 1D temporal kernel.
+        """
+        super(TimeBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, (1, kernel_size))
+        self.conv2 = nn.Conv2d(in_channels, out_channels, (1, kernel_size))
+        self.conv3 = nn.Conv2d(in_channels, out_channels, (1, kernel_size))
+
+    def forward(self, X):
+        """
+        :param X: Input data of shape (batch_size, num_nodes, num_timesteps,
+        num_features=in_channels)
+        :return: Output data of shape (batch_size, num_nodes,
+        num_timesteps_out, num_features_out=out_channels)
+        """
+        # Convert into NCHW format for pytorch to perform convolutions.
+        X = X.permute(0, 3, 1, 2)
+        temp = self.conv1(X) + torch.sigmoid(self.conv2(X))
+        out = F.relu(temp + self.conv3(X))
+        # Convert back from NCHW to NHWC
+        out = out.permute(0, 2, 3, 1)
+        return out
+
+
+class STGCNBlock(nn.Module):
+    """
+    Neural network block that applies a temporal convolution on each node in
+    isolation, followed by a graph convolution, followed by another temporal
+    convolution on each node.
+    """
+
+    def __init__(self, in_channels, spatial_channels, out_channels,
+                 num_nodes):
+        """
+        :param in_channels: Number of input features at each node in each time
+        step.
+        :param spatial_channels: Number of output channels of the graph
+        convolutional, spatial sub-block.
+        :param out_channels: Desired number of output features at each node in
+        each time step.
+        :param num_nodes: Number of nodes in the graph.
+        """
+        super(STGCNBlock, self).__init__()
+        self.temporal1 = TimeBlock(in_channels=in_channels,
+                                   out_channels=out_channels)
+        self.Theta1 = nn.Parameter(torch.FloatTensor(out_channels,
+                                                     spatial_channels))
+        self.temporal2 = TimeBlock(in_channels=spatial_channels,
+                                   out_channels=out_channels)
+        self.batch_norm = nn.BatchNorm2d(num_nodes)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        stdv = 1. / math.sqrt(self.Theta1.shape[1])
+        self.Theta1.data.uniform_(-stdv, stdv)
+
+    def forward(self, X, A_hat):
+        """
+        :param X: Input data of shape (batch_size, num_nodes, num_timesteps,
+        num_features=in_channels).
+        :param A_hat: Normalized adjacency matrix.
+        :return: Output data of shape (batch_size, num_nodes,
+        num_timesteps_out, num_features=out_channels).
+        """
+        t = self.temporal1(X)
+        lfs = torch.einsum("ij,jklm->kilm", [A_hat, t.permute(1, 0, 2, 3)])
+        # t2 = F.relu(torch.einsum("ijkl,lp->ijkp", [lfs, self.Theta1]))
+        t2 = F.relu(torch.matmul(lfs, self.Theta1))
+        t3 = self.temporal2(t2)
+        return self.batch_norm(t3)
+        # return t3
+
+
+class STGCN(nn.Module):
+    """
+    Spatio-temporal graph convolutional network as described in
+    https://arxiv.org/abs/1709.04875v3 by Yu et al.
+    Input should have shape (batch_size, num_nodes, num_input_time_steps,
+    num_features).
+    """
+
+    def __init__(self, num_nodes, num_features, num_timesteps_input,
+                 num_timesteps_output):
+        """
+        :param num_nodes: Number of nodes in the graph.
+        :param num_features: Number of features at each node in each time step.
+        :param num_timesteps_input: Number of past time steps fed into the
+        network.
+        :param num_timesteps_output: Desired number of future time steps
+        output by the network.
+        """
+        super(STGCN, self).__init__()
+        self.block1 = STGCNBlock(in_channels=num_features, out_channels=64,
+                                 spatial_channels=16, num_nodes=num_nodes)
+        self.block2 = STGCNBlock(in_channels=64, out_channels=64,
+                                 spatial_channels=16, num_nodes=num_nodes)
+        self.last_temporal = TimeBlock(in_channels=64, out_channels=64)
+        self.fully = nn.Linear((num_timesteps_input - 2 * 5) * 64,
+                               num_timesteps_output)
+
+    def forward(self, A_hat, X):
+        """
+        :param X: Input data of shape (batch_size, num_nodes, num_timesteps,
+        num_features=in_channels).
+        :param A_hat: Normalized adjacency matrix.
+        """
+        out1 = self.block1(X, A_hat)
+        out2 = self.block2(out1, A_hat)
+        out3 = self.last_temporal(out2)
+        out4 = self.fully(out3.reshape((out3.shape[0], out3.shape[1], -1)))
+        return out4
+    
+
+class STGCNClassifier(nn.Module):
+    def __init__(self, num_nodes, num_features=1, num_classes=1):
+        super(STGCNClassifier, self).__init__()
+        self.block1 = STGCNBlock(
+            in_channels=num_features,
+            out_channels=64,
+            spatial_channels=16,
+            num_nodes=num_nodes,
+        )
+        self.block2 = STGCNBlock(
+            in_channels=64, out_channels=64, spatial_channels=16, num_nodes=num_nodes
+        )
+        self.last_temporal = TimeBlock(in_channels=64, out_channels=64)
+
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))  # (nodes, time) → (1, 1)
+        self.classifier = nn.Linear(64, num_classes)  # 64 from channels after conv
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, X, A_hat):
+        """
+        :param X: Input data of shape (batch_size, num_nodes, num_timesteps,
+        num_features=in_channels).
+        :param A_hat: Normalized adjacency matrix.
+        """
+        res_X = X
+        out = self.block1(X, A_hat)
+        # out += res_X
+        # res_X = out
+        out = self.block2(out, A_hat)
+        # out += res_X
+        # res_X = out
+        out = self.last_temporal(out)  # shape: (B, N, T, C)
+        # out += res_X
+        out = out.permute(0, 3, 1, 2)  # (B, C, N, T) for pooling
+        out = self.pool(out)  # → (B, C, 1, 1)
+        out = out.view(out.size(0), -1)  # → (B, C)
+        out = self.classifier(out)  # → (B, 1)
+        return out
+    
+
+class STGCNClassifier_2(nn.Module):
+    def __init__(self, num_nodes, num_features=1, num_classes=1):
+        super(STGCNClassifier_2, self).__init__()
+        self.block1 = STGCNBlock(
+            in_channels=num_features,
+            out_channels=64,
+            spatial_channels=16,
+            num_nodes=num_nodes,
+        )
+        self.block2 = STGCNBlock(
+            in_channels=64, out_channels=64, spatial_channels=16, num_nodes=num_nodes
+        )
+        self.last_temporal = TimeBlock(in_channels=64, out_channels=64)
+
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))  # (nodes, time) → (1, 1)
+
+        self.linear_1 = nn.Linear(64, 256)
+        self.linear_2 = nn.Linear(256, 128)
+        self.classifier = nn.Linear(128, num_classes)  # 64 from channels after conv
+
+    def forward(self, X, A_hat):
+        """
+        :param X: Input data of shape (batch_size, num_nodes, num_timesteps,
+        num_features=in_channels).
+        :param A_hat: Normalized adjacency matrix.
+        """
+        res_X = X
+        out = self.block1(X, A_hat)
+        # out += res_X
+        # res_X = out
+        out = self.block2(out, A_hat)
+        # out += res_X
+        # res_X = out
+        out = self.last_temporal(out)  # shape: (B, N, T, C)
+        # out += res_X
+        out = out.permute(0, 3, 1, 2)  # (B, C, N, T) for pooling
+        out = self.pool(out)  # → (B, C, 1, 1)
+        out = out.view(out.size(0), -1)  # → (B, C)
+
+        out = F.relu(self.linear_1(out))
+        out = F.relu(self.linear_2(out))
+        out = self.classifier(out)  # → (B, 1)
+        return out
+
+
+class STGCNClassifier_AttnPool(nn.Module):
+    def __init__(self, num_nodes, num_features=1, num_classes=1):
+        super().__init__()
+        self.block1 = STGCNBlock(
+            in_channels=num_features,
+            out_channels=64,
+            spatial_channels=16,
+            num_nodes=num_nodes,
+        )
+        self.block2 = STGCNBlock(
+            in_channels=64, out_channels=64, spatial_channels=16, num_nodes=num_nodes
+        )
+        self.last_temporal = TimeBlock(in_channels=64, out_channels=64)
+
+        # attention scorer: maps each channel embedding → a scalar score
+        self.attn_scorer = nn.Conv2d(64, 1, kernel_size=1)  
+
+        self.linear_1 = nn.Linear(64, 256)
+        self.linear_2 = nn.Linear(256, 128)
+        self.classifier = nn.Linear(128, num_classes)  # 64 from channels after conv
+
+    def forward(self, X, A_hat):
+        # X: (B, N, T, F)
+        out = self.block1(X, A_hat)         # (B, N, T', C)
+        out = self.block2(out, A_hat)       # (B, N, T'', C)
+        out = self.last_temporal(out)       # (B, N, T''', C)
+
+        # bring to (B, C, N, T) for conv
+        z = out.permute(0, 3, 1, 2)         # (B, C, N, T)
+        # compute attention scores per node+time
+        scores = self.attn_scorer(z)        # (B, 1, N, T)
+        weights = torch.softmax(scores.view(z.size(0), -1), dim=1)
+        weights = weights.view_as(scores)   # (B,1,N,T)
+
+        # weighted sum: broadcast weights over channels
+        z_weighted = (z * weights).sum(dim=[2,3])  # (B, C)
+        out = F.relu(self.linear_1(z_weighted))
+        out = F.relu(self.linear_2(out))
+        out = self.classifier(out) # (B, num_classes)
+        return out 
+
+
+def get_normalized_adj(A):
+    """
+    Returns the degree normalized adjacency matrix.
+    """
+    A = A + torch.diag(torch.ones(A.shape[0], dtype=torch.float32))
+    D = torch.sum(A, dim=1).reshape(-1,)
+    D[D <= 10e-5] = 10e-5  # Prevent infs
+    diag = torch.reciprocal(torch.sqrt(D))
+    A_wave = torch.multiply(torch.multiply(diag.reshape((-1, 1)), A), diag.reshape((1, -1)))
+    return A_wave
+
+
+# --- TGCN ---- 
+
+# code form https://github.com/lehaifeng/T-GCN/blob/master/T-GCN/T-GCN-PyTorch/models/tgcn.py
+
+def calculate_laplacian_with_self_loop(matrix):
+    matrix = matrix + torch.eye(matrix.size(0))
+    row_sum = matrix.sum(1)
+    d_inv_sqrt = torch.pow(row_sum, -0.5).flatten()
+    d_inv_sqrt[torch.isinf(d_inv_sqrt)] = 0.0
+    d_mat_inv_sqrt = torch.diag(d_inv_sqrt)
+    normalized_laplacian = (
+        matrix.matmul(d_mat_inv_sqrt).transpose(0, 1).matmul(d_mat_inv_sqrt)
+    )
+    return normalized_laplacian
+
+
+class TGCNGraphConvolution(nn.Module):
+    def __init__(self, adj, num_gru_units: int, output_dim: int, bias: float = 0.0):
+        super(TGCNGraphConvolution, self).__init__()
+        self._num_gru_units = num_gru_units
+        self._output_dim = output_dim
+        self._bias_init_value = bias
+        self.register_buffer(
+            "laplacian", calculate_laplacian_with_self_loop(torch.FloatTensor(adj))
+        )
+        self.weights = nn.Parameter(
+            torch.FloatTensor(self._num_gru_units + 1, self._output_dim)
+        )
+        self.biases = nn.Parameter(torch.FloatTensor(self._output_dim))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.xavier_uniform_(self.weights)
+        nn.init.constant_(self.biases, self._bias_init_value)
+
+    def forward(self, inputs, hidden_state):
+        batch_size, num_nodes = inputs.shape
+        # inputs (batch_size, num_nodes) -> (batch_size, num_nodes, 1)
+        inputs = inputs.reshape((batch_size, num_nodes, 1))
+        # hidden_state (batch_size, num_nodes, num_gru_units)
+        hidden_state = hidden_state.reshape(
+            (batch_size, num_nodes, self._num_gru_units)
+        )
+        # [x, h] (batch_size, num_nodes, num_gru_units + 1)
+        concatenation = torch.cat((inputs, hidden_state), dim=2)
+        # [x, h] (num_nodes, num_gru_units + 1, batch_size)
+        concatenation = concatenation.transpose(0, 1).transpose(1, 2)
+        # [x, h] (num_nodes, (num_gru_units + 1) * batch_size)
+        concatenation = concatenation.reshape(
+            (num_nodes, (self._num_gru_units + 1) * batch_size)
+        )
+        # A[x, h] (num_nodes, (num_gru_units + 1) * batch_size)
+        a_times_concat = self.laplacian @ concatenation
+        # A[x, h] (num_nodes, num_gru_units + 1, batch_size)
+        a_times_concat = a_times_concat.reshape(
+            (num_nodes, self._num_gru_units + 1, batch_size)
+        )
+        # A[x, h] (batch_size, num_nodes, num_gru_units + 1)
+        a_times_concat = a_times_concat.transpose(0, 2).transpose(1, 2)
+        # A[x, h] (batch_size * num_nodes, num_gru_units + 1)
+        a_times_concat = a_times_concat.reshape(
+            (batch_size * num_nodes, self._num_gru_units + 1)
+        )
+        # A[x, h]W + b (batch_size * num_nodes, output_dim)
+        outputs = a_times_concat @ self.weights + self.biases
+        # A[x, h]W + b (batch_size, num_nodes, output_dim)
+        outputs = outputs.reshape((batch_size, num_nodes, self._output_dim))
+        # A[x, h]W + b (batch_size, num_nodes * output_dim)
+        outputs = outputs.reshape((batch_size, num_nodes * self._output_dim))
+        return outputs
+
+    @property
+    def hyperparameters(self):
+        return {
+            "num_gru_units": self._num_gru_units,
+            "output_dim": self._output_dim,
+            "bias_init_value": self._bias_init_value,
+        }
+
+
+class TGCNCell(nn.Module):
+    def __init__(self, adj, input_dim: int, hidden_dim: int):
+        super(TGCNCell, self).__init__()
+        self._input_dim = input_dim
+        self._hidden_dim = hidden_dim
+        self.register_buffer("adj", torch.FloatTensor(adj))
+        self.graph_conv1 = TGCNGraphConvolution(
+            self.adj, self._hidden_dim, self._hidden_dim * 2, bias=1.0
+        )
+        self.graph_conv2 = TGCNGraphConvolution(
+            self.adj, self._hidden_dim, self._hidden_dim
+        )
+
+    def forward(self, inputs, hidden_state):
+        # [r, u] = sigmoid(A[x, h]W + b)
+        # [r, u] (batch_size, num_nodes * (2 * num_gru_units))
+        concatenation = torch.sigmoid(self.graph_conv1(inputs, hidden_state))
+        # r (batch_size, num_nodes, num_gru_units)
+        # u (batch_size, num_nodes, num_gru_units)
+        r, u = torch.chunk(concatenation, chunks=2, dim=1)
+        # c = tanh(A[x, (r * h)W + b])
+        # c (batch_size, num_nodes * num_gru_units)
+        c = torch.tanh(self.graph_conv2(inputs, r * hidden_state))
+        # h := u * h + (1 - u) * c
+        # h (batch_size, num_nodes * num_gru_units)
+        new_hidden_state = u * hidden_state + (1.0 - u) * c
+        return new_hidden_state, new_hidden_state
+
+    @property
+    def hyperparameters(self):
+        return {"input_dim": self._input_dim, "hidden_dim": self._hidden_dim}
+
+
+class TGCN(nn.Module):
+    def __init__(self, adj, hidden_dim: int, **kwargs):
+        super(TGCN, self).__init__()
+        self._input_dim = adj.shape[0]
+        self._hidden_dim = hidden_dim
+        self.register_buffer("adj", torch.FloatTensor(adj))
+        self.tgcn_cell = TGCNCell(self.adj, self._input_dim, self._hidden_dim)
+
+    def forward(self, inputs):
+        batch_size, seq_len, num_nodes = inputs.shape
+        assert self._input_dim == num_nodes
+        hidden_state = torch.zeros(batch_size, num_nodes * self._hidden_dim).type_as(
+            inputs
+        )
+        output = None
+        for i in range(seq_len):
+            output, hidden_state = self.tgcn_cell(inputs[:, i, :], hidden_state)
+            output = output.reshape((batch_size, num_nodes, self._hidden_dim))
+        return output
+
+    @property
+    def hyperparameters(self):
+        return {"input_dim": self._input_dim, "hidden_dim": self._hidden_dim}
+    
+
+class TGCNClassifier(nn.Module):
+    def __init__(self, adj, hidden_dim: int, num_classes: int):
+        super(TGCNClassifier, self).__init__()
+
+        self.register_buffer("adj", torch.FloatTensor(adj))
+        self.tgcn = TGCN(adj, hidden_dim)
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, num_classes),
+        )
+
+    def forward(self, inputs):
+        # inputs: (batch_size, seq_len, num_nodes)
+        tgcn_output = self.tgcn(inputs)  # (batch_size, num_nodes, hidden_dim)
+
+        # Global Average Pooling over nodes (or you can use sum/max/etc.)
+        graph_embedding = tgcn_output.mean(dim=1)  # (batch_size, hidden_dim)
+
+        # Classification layer
+        logits = self.classifier(graph_embedding)  # (batch_size, num_classes)
+        return logits
+    
+
+# ---- DTGCN -----
+
+
+def calculate_laplacian_with_self_loop_2(matrix):
+    batch_size, num_nodes, _ = matrix.shape
+    eye = torch.eye(num_nodes).expand(batch_size, -1, -1).to(matrix.device)
+    matrix = matrix + eye
+    row_sum = matrix.sum(dim=2)  # sum over last dimension
+    d_inv_sqrt = torch.pow(row_sum, -0.5)
+    d_inv_sqrt[torch.isinf(d_inv_sqrt)] = 0.0
+    # Create diagonal matrices for each batch
+    d_mat_inv_sqrt = torch.diag_embed(d_inv_sqrt)
+    normalized_laplacian = torch.bmm(torch.bmm(matrix, d_mat_inv_sqrt), 
+                                    d_mat_inv_sqrt.transpose(-2, -1))
+
+    return normalized_laplacian
+
+
+class TGCNGraphConvolution_2(nn.Module):
+    def __init__(self, num_gru_units: int, output_dim: int, bias: float = 0.0):
+        super(TGCNGraphConvolution_2, self).__init__()
+        self._num_gru_units = num_gru_units
+        self._output_dim = output_dim
+        self._bias_init_value = bias
+        self.weights = nn.Parameter(
+            torch.FloatTensor(self._num_gru_units + 1, self._output_dim)
+        )
+        self.biases = nn.Parameter(torch.FloatTensor(self._output_dim))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.xavier_uniform_(self.weights)
+        nn.init.constant_(self.biases, self._bias_init_value)
+
+    def forward(self, inputs, hidden_state, adj):
+        # Ensure adj is on the same device as inputs
+        adj = adj.to(inputs.device)
+        laplacian = calculate_laplacian_with_self_loop_2(adj)
+
+        batch_size, num_nodes = inputs.shape
+        # inputs (batch_size, num_nodes) -> (batch_size, num_nodes, 1)
+        inputs = inputs.reshape((batch_size, num_nodes, 1))
+        # hidden_state (batch_size, num_nodes, num_gru_units)
+        hidden_state = hidden_state.reshape(
+            (batch_size, num_nodes, self._num_gru_units)
+        )
+        # [x, h] (batch_size, num_nodes, num_gru_units + 1)
+        concatenation = torch.cat((inputs, hidden_state), dim=2)
+        # batch size, num_nodes, gru_units, we want concatenation to still be batch_size
+        # [x, h] (num_nodes, num_gru_units + 1, batch_size)
+        # concatenation = concatenation.transpose(0, 1).transpose(1, 2)
+        # [x, h] (num_nodes, (num_gru_units + 1) * batch_size)
+        # concatenation = concatenation.reshape(
+        #     (num_nodes, (self._num_gru_units + 1) * batch_size)
+        # )
+        # A[x, h] (num_nodes, (num_gru_units + 1) * batch_size)
+        a_times_concat = laplacian @ concatenation
+        # A[x, h] (num_nodes, num_gru_units + 1, batch_size)
+        # a_times_concat = a_times_concat.reshape(
+        #     (num_nodes, self._num_gru_units + 1, batch_size)
+        # )
+        a_times_concat = a_times_concat.reshape(
+            (batch_size, num_nodes, self._num_gru_units + 1)
+        )
+        # A[x, h] (batch_size, num_nodes, num_gru_units + 1)
+        a_times_concat = a_times_concat.transpose(0, 2).transpose(1, 2)
+        # A[x, h] (batch_size * num_nodes, num_gru_units + 1)
+        a_times_concat = a_times_concat.reshape(
+            (batch_size * num_nodes, self._num_gru_units + 1)
+        )
+        # A[x, h]W + b (batch_size * num_nodes, output_dim)
+        outputs = a_times_concat @ self.weights + self.biases
+        # A[x, h]W + b (batch_size, num_nodes, output_dim)
+        outputs = outputs.reshape((batch_size, num_nodes, self._output_dim))
+        # A[x, h]W + b (batch_size, num_nodes * output_dim)
+        outputs = outputs.reshape((batch_size, num_nodes * self._output_dim))
+        return outputs
+
+    @property
+    def hyperparameters(self):
+        return {
+            "num_gru_units": self._num_gru_units,
+            "output_dim": self._output_dim,
+            "bias_init_value": self._bias_init_value,
+        }
+
+
+class TGCNCell_2(nn.Module):
+    def __init__(self, input_dim: int, hidden_dim: int):
+        super(TGCNCell_2, self).__init__()
+        self._input_dim = input_dim
+        self._hidden_dim = hidden_dim
+        self.graph_conv1 = TGCNGraphConvolution_2(
+            self._hidden_dim, self._hidden_dim * 2, bias=1.0
+        )
+        self.graph_conv2 = TGCNGraphConvolution_2(
+            self._hidden_dim, self._hidden_dim
+        )
+
+    def forward(self, inputs, hidden_state, adj):
+        # [r, u] = sigmoid(A[x, h]W + b)
+        # [r, u] (batch_size, num_nodes * (2 * num_gru_units))
+        concatenation = torch.sigmoid(self.graph_conv1(inputs, hidden_state, adj))
+        # r (batch_size, num_nodes, num_gru_units)
+        # u (batch_size, num_nodes, num_gru_units)
+        r, u = torch.chunk(concatenation, chunks=2, dim=1)
+        # c = tanh(A[x, (r * h)W + b])
+        # c (batch_size, num_nodes * num_gru_units)
+        c = torch.tanh(self.graph_conv2(inputs, r * hidden_state, adj))
+        # h := u * h + (1 - u) * c
+        # h (batch_size, num_nodes * num_gru_units)
+        new_hidden_state = u * hidden_state + (1.0 - u) * c
+        return new_hidden_state, new_hidden_state
+
+    @property
+    def hyperparameters(self):
+        return {"input_dim": self._input_dim, "hidden_dim": self._hidden_dim}
+    
+
+class TGCN_2(nn.Module):
+    def __init__(self, input_dim, hidden_dim: int, **kwargs):
+        super(TGCN_2, self).__init__()
+        self._input_dim = input_dim
+        self._hidden_dim = hidden_dim
+        self.tgcn_cell = TGCNCell_2(self._input_dim, self._hidden_dim)
+
+    def forward(self, inputs, hidden_state, adj):
+        batch_size, num_nodes, seq_len = inputs.shape
+        assert self._input_dim == num_nodes
+        assert list(hidden_state.shape) == [batch_size, num_nodes * self._hidden_dim]
+        # hidden_state = torch.zeros(batch_size, num_nodes * self._hidden_dim).type_as(
+        #     inputs
+        # )
+        output = None
+        for i in range(seq_len):
+            output, hidden_state = self.tgcn_cell(inputs[:, :, i], hidden_state, adj)
+            # output = output.reshape((batch_size, num_nodes, self._hidden_dim))
+        return output
+
+    @property
+    def hyperparameters(self):
+        return {"input_dim": self._input_dim, "hidden_dim": self._hidden_dim}
+
+
+class GraphStructureLearner(nn.Module):
+    def __init__(
+        self,
+        node_feature_dim: int,
+        embed_dim: int,
+        alpha: float = 1.0,
+    ):
+        super(GraphStructureLearner, self).__init__()
+
+        self.alpha = alpha
+
+        # the amount of in_channels is the the size of the node v features
+        self.gconv = GCNConv(in_channels=node_feature_dim, out_channels=embed_dim)
+
+        # calculate the dynamic features of src and dst nodes (allows the model to learn directed or asymmetric relationships between node)
+        self.linear_de1 = nn.Linear(embed_dim, embed_dim)
+        self.linear_de2 = nn.Linear(embed_dim, embed_dim)
+
+    def forward(self, v_h, edge_list, edge_weights):
+        # We want batch_size, the number of nodes and then the features for gconv
+
+        df = self.gconv(v_h, edge_list, edge_weights)
+
+        de1 = torch.tanh(self.alpha * self.linear_de1(df))
+        de2 = torch.tanh(self.alpha * self.linear_de2(df))
+
+        # Et = RELU(tanh(alpha * (DE1 * DE2^T - DE2 * DE1^T))) - Simplified interpretation
+        Et = torch.relu(
+            torch.tanh(
+                self.alpha * (de1 @ de2.transpose(-2, -1) - de2 @ de1.transpose(-2, -1))
+            )
+        )
+
+        # mt = Et.mean(dim = 1) # the adjacency matrix at time t will be the average of the windows (that we did on the 12 second window coarse grained lable)
+
+        return Et
+
+
+class DTGCN(nn.Module):
+    def __init__(
+        self,
+        num_nodes: int,
+        gsl_embed_dim: int,
+        tgcn_hidden_dim: int,  # The H size
+        window_size: int,  # K window size
+        gsl_alpha: float,
+        gsl_avg_steps: int,
+        num_classes: int = 1,
+    ):
+        super().__init__()
+
+        self.num_nodes = num_nodes
+        self.gsl_embed_dim = gsl_embed_dim
+        self.window_size = window_size
+        self.gsl_alpha = gsl_alpha
+        self.gsl_avg_steps = gsl_avg_steps
+        self.tgcn_hidden_dim = tgcn_hidden_dim
+
+        gcn_in_channels = window_size + tgcn_hidden_dim
+        self.graph_structure_learner = GraphStructureLearner(
+            gcn_in_channels, gsl_embed_dim
+        )
+        self.tgcn = TGCN_2(
+            num_nodes, tgcn_hidden_dim
+        )  # accepts at forward always a different graph adjacency and list
+
+        self.classifier = nn.Linear(tgcn_hidden_dim * num_nodes, num_classes)
+
+    def forward(self, x, static_edge_index, static_edge_weight=None):
+        """
+        Args:
+            x (Tensor): Input time series. Shape: [B, T, N] (Batch, Time, Nodes)
+                        Assumes node_input_feat_dim=1, so T is time steps.
+            static_edge_index (LongTensor): Shared predefined graph connectivity. Shape: [2, E_static]
+            static_edge_weight (Tensor, optional): Shared predefined graph weights. Shape: [E_static]
+        Returns:
+            out (Tensor): Classification logits. Shape: [B, num_classes]
+        """
+        x = x.transpose(-2, -1)
+        if x.dim() == 3:  # Assume [B, N, T] -> [B, N, T, 1]
+            x = x.unsqueeze(-1)
+        batch_size, N, time_steps, F_in = x.shape
+        assert N == self.num_nodes
+        # assert F_in == self.node_input_feat_dim
+        device = x.device
+        H_dim = self.tgcn_hidden_dim
+
+        # --- Initialize States ---
+        # TGCN hidden state shape [B*N, H]. Initialize correctly.
+        h_prev_flat = torch.zeros(batch_size, N * H_dim, device=device)
+
+        E_history_deque = deque(maxlen=self.gsl_avg_steps)
+
+        # --- Prepare input windows V_t ---
+        # Use unfold to create sliding windows V_t = {x_{t-K+1}, ..., x_t}
+        # Input x: [B, N, T, F_in]
+        # We need to window along the time dimension (dim=2)
+        # Permute to put Time dim first for unfold: [B, N, F_in, T]
+        x_permuted = x.permute(0, 1, 3, 2)  # [B, N, F_in, T]
+        # Unfold along the last dim (T): size=K, step=1 (for sliding window)
+        # Output shape: [B, N, F_in, num_windows, K] where num_windows = T - K + 1
+        v_t_unfolded = x_permuted.unfold(
+            dimension=-1, size=self.window_size, step=self.window_size
+        )
+
+        # Permute and reshape V_t to be [B, num_windows, N, K*F_in] for easier iteration
+        v_t = v_t_unfolded.permute(0, 3, 1, 4, 2).reshape(
+            batch_size, -1, N, self.window_size * F_in
+        )
+        num_windows = v_t.shape[1]
+
+        # --- Temporal Loop ---
+        outputs = []
+        for t in range(num_windows):
+            # Get current window features V_t: [B, N, K*F_in]
+            v_t_step = v_t[:, t, :, :]
+
+            # Reshape previous hidden state for GSL input: [B*N, H] -> [B, N, H]
+            h_prev = h_prev_flat.view(batch_size, N, H_dim)
+
+            # Concatenate V_t and H_{t-1} to form I_t: [B, N, K*F_in + H]
+            I_t = torch.cat([v_t_step, h_prev], dim=-1)
+
+            # --- Graph Structure Learning ---
+            # Using the simplified GSL that takes [B, N, F]
+            # Pass I_t [B, N, K*F_in + H]
+            data_list = []
+            for i in range(batch_size):
+                data_list.append(
+                    Data(
+                        x=I_t[i],
+                        edge_index=static_edge_index,
+                        edge_weight=static_edge_weight,
+                    )
+                )
+            batch_graph = Batch.from_data_list(data_list)
+            Et = self.graph_structure_learner(
+                I_t, static_edge_index, static_edge_weight
+            )  # Output Et: [B, N, N]
+
+            E_history_deque.append(Et)
+
+            # --- Average Dynamic Graph ---
+            # Use the history buffer to compute Mt (averaged Et)
+            if len(E_history_deque) > 0:
+                # Shape becomes [current_deque_len, B, N, N]
+                relevant_Et_stack = torch.stack(list(E_history_deque), dim=0)
+                # Average along the time dimension (dim=0)
+                Mt_batch = torch.mean(relevant_Et_stack, dim=0)  # [B, N, N]
+            else:
+                # Should not happen if loop runs at least once and n>=1
+                # Handle gracefully just in case (e.g., use static graph or identity?)
+                # Using Et directly if history is empty (only first step if n=1)
+                Mt_batch = Et
+
+            # --- Prepare Inputs for TGCN Cell ---
+            # TGCN expects node features x_t: [B*N, F_tgcn_in]
+            # F_tgcn_in = K * F_in (windowed features per node)
+
+            data_list = []
+            # Hidden state h_prev_flat is already [B*N, H]
+
+            # --- Apply TGCN Cell ---
+            # Uses x_t, h_{t-1}, and the *averaged* dynamic graph M_t
+            h_t_flat = self.tgcn(
+                v_t_step,
+                h_prev_flat,
+                Mt_batch,
+            )  # Output h_t_flat: [B*N, H]
+
+            # h_t_flat = self.tgcn(
+            #     X=x_tgcn_in,
+            #     H=h_prev_flat,
+            #     edge_index=batched_edge_index,
+            #     edge_weight=batched_edge_weight,
+            # )  # Output h_t_flat: [B*N, H]
+
+            # Update previous hidden state for the next loop iteration
+            h_prev_flat = h_t_flat
+            # Store the output hidden state (optional, e.g., for pooling later)
+            # outputs.append(h_t_flat.view(batch_size, N, H_dim))
+
+        # --- Final Classification ---
+        # Use the *last* hidden state h_t_flat from the loop
+        # Reshape from [B*N, H] to [B, N*H] for the linear classifier
+        final_h_reshaped = h_prev_flat.view(batch_size, -1)  # [B, N*H]
+        logits = self.classifier(final_h_reshaped)  # [B, num_classes]
+
+        return logits
