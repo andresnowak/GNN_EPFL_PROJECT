@@ -64,7 +64,7 @@ def load_eeg_data(
 
     print("Loading Data")
 
-    data_path = "../data"  # we use relative path
+    # data_path = "../data"  # we use relative path
     DATA_ROOT = Path(data_path)
     clips_tr = pd.read_parquet(
         DATA_ROOT / train_path, engine="pyarrow", use_threads=True, memory_map=True
@@ -159,7 +159,7 @@ def load_eeg_val_data(
 
     print("Loading Data")
 
-    data_path = "../data"  # we use relative path
+    # data_path = "../data"  # we use relative path
     DATA_ROOT = Path(data_path)
 
     clips_val = pd.read_parquet(
@@ -210,7 +210,7 @@ def load_eeg_val_data(
 
 
 def load_graph(data_path: str, graph_path: str, edge_distances_1: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
-    data_path = "../data"  # we use relative path
+    # data_path = "../data"  # we use relative path
     DATA_ROOT = Path(data_path)
 
     # Load distances of nodes
