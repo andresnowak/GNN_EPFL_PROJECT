@@ -6,6 +6,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.transforms import AddLaplacianEigenvectorPE
 
+import sys
+sys.path.append("/path/to/spaces")
+from models.s4.s4 import S4Block
+
+
 class GAT(nn.Module):
     def __init__(
         self,
@@ -428,4 +433,215 @@ class LSTM_GraphTransformer(nn.Module):
             h = F.relu(h + h_in)
             h = self.dropout(h)
         out = global_mean_pool(h, batch.batch)
+        return self.classifier(out)
+
+class S4_(nn.Module):
+    def __init__(self, s4_hidden_dim=128, s4_dropout=0.2):
+        super().__init__()
+        self.input_proj = nn.Linear(1, s4_hidden_dim)
+        self.s4 = S4Block(
+            d_model=s4_hidden_dim,
+            dropout=s4_dropout,
+            transposed=True,
+            l_max=354
+        )
+        self.dropout = nn.Dropout(s4_dropout)
+        self.classifier = nn.Linear(s4_hidden_dim, 1)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        if hasattr(self.s4, "reset_parameters"):
+            self.s4.reset_parameters()
+        nn.init.xavier_uniform_(self.input_proj.weight)
+        nn.init.zeros_(self.input_proj.bias)
+        nn.init.xavier_uniform_(self.classifier.weight)
+        if self.classifier.bias is not None:
+            nn.init.zeros_(self.classifier.bias)
+
+    def forward(self, x):
+        B, T, N = x.shape
+        x_flat = x.permute(0, 2, 1).reshape(B * N, T, 1)
+        x_proj = self.input_proj(x_flat)
+        x_s4_in = x_proj.transpose(1, 2)
+        z, _ = self.s4(x_s4_in)
+        node_feats = z.mean(dim=-1)
+        node_feats = node_feats.view(B, N, -1)
+        node_feats = self.dropout(node_feats)
+        graph_feats = node_feats.mean(dim=1)
+        logits = self.classifier(graph_feats)
+        
+        return logits
+
+
+class S4_GCN(nn.Module):
+    def __init__(
+        self,
+        s4_hidden_dim=128,
+        s4_dropout=0.2,
+        gcn_hidden=256,
+        gcn_out=256,
+        gcn_dropout=0.2
+    ):
+        super().__init__()
+
+        self.input_proj = nn.Linear(1, s4_hidden_dim)
+        self.s4 = S4Block(
+            d_model=s4_hidden_dim,
+            dropout=s4_dropout,
+            transposed=True,
+            l_max=354
+        )
+        self.gcn1 = GCNConv(s4_hidden_dim, gcn_hidden)
+        self.norm1 = GraphNorm(gcn_hidden)
+        self.res_proj1 = nn.Linear(s4_hidden_dim, gcn_hidden)
+        self.gcn2 = GCNConv(gcn_hidden, gcn_out)
+        self.norm2 = GraphNorm(gcn_out)
+        self.dropout = nn.Dropout(gcn_dropout)
+        self.classifier = nn.Linear(gcn_out, 1)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        if hasattr(self.s4, "reset_parameters"):
+            self.s4.reset_parameters()
+        self.gcn1.reset_parameters()
+        self.gcn2.reset_parameters()
+        nn.init.xavier_uniform_(self.classifier.weight)
+        if self.classifier.bias is not None:
+            nn.init.zeros_(self.classifier.bias)
+
+    def forward(self, x, edge_index, edge_weight=None):
+        B, T, N = x.shape
+        x = x.permute(0, 2, 1).reshape(B * N, T, 1)
+        x = self.input_proj(x)
+        x = x.transpose(-1, -2)
+        z, _ = self.s4(x)
+        node_feats = z.mean(dim=-1).view(B, N, -1)
+
+        graphs = []
+        for i in range(B):
+            graphs.append(Data(
+                x=node_feats[i],
+                edge_index=edge_index.clone(),
+                edge_weight=edge_weight.clone() if edge_weight is not None else None
+            ))
+        batch = Batch.from_data_list(graphs)
+
+        h0 = batch.x
+        h = self.gcn1(h0, batch.edge_index, batch.edge_weight)
+        h = self.norm1(h, batch.batch)
+        res = self.res_proj1(h0)
+        h = F.relu(h + res)
+        h = self.dropout(h)
+
+        h1 = h
+        h = self.gcn2(h, batch.edge_index, batch.edge_weight)
+        h = self.norm2(h, batch.batch)
+        h = F.relu(h + h1)
+        h = self.dropout(h)
+
+        out = global_mean_pool(h, batch.batch)
+
+        return self.classifier(out)
+
+class S4_GAT(nn.Module):
+    def __init__(
+        self,
+        s4_hidden_dim=128,
+        gat_hidden=256,
+        gat_out=256,
+        num_heads=4,
+        dropout=0.2
+    ):
+        super().__init__()
+        self.input_proj = nn.Linear(1, s4_hidden_dim)
+        self.s4 = S4Block(
+            d_model=s4_hidden_dim,
+            dropout=dropout,
+            transposed=True,
+            l_max=354
+        )
+        self.dropout = nn.Dropout(dropout)
+        self.s4_to_gat = nn.Linear(s4_hidden_dim, gat_hidden)
+
+        self.gat1 = GATConv(
+            in_channels=gat_hidden,
+            out_channels=gat_hidden // num_heads,
+            heads=num_heads,
+            dropout=dropout
+        )
+        self.norm1 = GraphNorm(gat_hidden)
+
+        self.gat2 = GATConv(
+            in_channels=gat_hidden,
+            out_channels=gat_hidden // num_heads,
+            heads=num_heads,
+            dropout=dropout
+        )
+        self.norm2 = GraphNorm(gat_hidden)
+
+        self.gat3 = GATConv(
+            in_channels=gat_hidden,
+            out_channels=gat_out // num_heads,
+            heads=num_heads,
+            dropout=dropout
+        )
+        self.norm3 = GraphNorm(gat_out)
+
+        self.classifier = nn.Linear(gat_out, 1)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        if hasattr(self.s4, "reset_parameters"):
+            self.s4.reset_parameters()
+        nn.init.xavier_uniform_(self.input_proj.weight)
+        nn.init.zeros_(self.input_proj.bias)
+        nn.init.xavier_uniform_(self.s4_to_gat.weight)
+        nn.init.zeros_(self.s4_to_gat.bias)
+        self.gat1.reset_parameters()
+        self.gat2.reset_parameters()
+        self.gat3.reset_parameters()
+        nn.init.xavier_uniform_(self.classifier.weight)
+        if self.classifier.bias is not None:
+            nn.init.zeros_(self.classifier.bias)
+
+    def forward(self, x, edge_index, edge_weight=None):
+        B, T, N = x.shape
+        x = x.permute(0, 2, 1).reshape(B * N, T, 1)
+        x = self.input_proj(x)
+        x = x.transpose(1, 2)
+        z, _ = self.s4(x)
+        node_feats = z.mean(dim=-1).view(B, N, -1)
+        node_feats = self.dropout(node_feats)
+        node_feats = self.s4_to_gat(node_feats)
+
+        graphs = []
+        for i in range(B):
+            graphs.append(Data(
+                x=node_feats[i],
+                edge_index=edge_index.clone(),
+                edge_attr=edge_weight.clone() if edge_weight is not None else None
+            ))
+        batch = Batch.from_data_list(graphs)
+        ew = batch.edge_attr
+
+        h0 = batch.x
+        h = self.gat1(h0, batch.edge_index, ew)
+        h = self.norm1(h, batch.batch)
+        h = F.relu(h + h0)
+        h = self.dropout(h)
+
+        h1 = h
+        h = self.gat2(h, batch.edge_index, ew)
+        h = self.norm2(h, batch.batch)
+        h = F.relu(h + h1)
+        h = self.dropout(h)
+
+        h2 = h
+        h = self.gat3(h, batch.edge_index, ew)
+        h = self.norm3(h, batch.batch)
+        h = F.relu(h + h2)
+        h = self.dropout(h)
+
+        out = global_mean_pool(h, batch.batch)
+        
         return self.classifier(out)
