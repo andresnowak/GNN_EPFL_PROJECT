@@ -1,0 +1,54 @@
+# Training Configuration
+
+# --- General Settings ---
+seed: 1
+
+# --- Data Settings ---
+data_path: "../data" # Relative or absolute path to the data directory
+train_parquet_file: "train/segments_train.parquet"
+val_parquet_file: "train/segments_val.parquet"
+distances_csv_file: "distances_3d.csv"
+val_split_size: 0.1 # Proportion of training data to use for validation
+val_robust: True
+
+# --- Preprocessing Settings ---
+signal_processing:
+  filtering_type: "frequency_domain"
+  bandpass_filter:
+    order: 4
+    lowcut: 0.5
+    highcut: 30.0
+    fs: 250
+
+model:
+  name: "DTGCN" 
+  num_eeg_channels: 19
+  gsl_embed_dim: 100
+  tgcn_hidden_dim: 200
+  window_size: 50
+  gsl_alpha: 1
+  gsl_avg_steps: 1
+  number_of_classes: 1
+
+# --- Training Hyperparameters ---
+training:
+  batch_size: 128
+  epochs: 200
+  lr: 0.00005 # 5e-5
+  weight_decay: 0.00001 # 1e-5
+  max_norm: 10.0
+  pos_weight: True
+  smote: False
+  lr_scheduler: False
+
+# --- Checkpoint Settings ---
+checkpoint:
+  save_dir_in_wandb: true # Saves checkpoints in wandb run directory
+  best_model_filename: "best_dtgcn_model.pth"
+  final_model_filename: "final_dtgcn_model.pth" # Note: script uses 'final_dtgcn_model.pth' but refers to SMOTE model
+
+# --- Weights & Biases Logging ---
+wandb:
+  project: "eeg-DTGCN"
+  run_name: "DTGCN"
+  log_gradients: true
