@@ -29,7 +29,7 @@ import wandb
 from sklearn.metrics import f1_score
 from tqdm import tqdm
 
-from src.stgcn import STGCNClassifier, get_normalized_adj, STGCNClassifier_2
+from src.stgcn import STGCNClassifier, get_normalized_adj, STGCNClassifier_AttnPool
 from src.utils import load_config, load_eeg_data, load_graph, apply_smote_to_eeg_dataset, save_config, AugmentedDataset
 import json
 
@@ -127,6 +127,11 @@ def main(config: dict):
             "input_dim": input_dim,
             "max_norm": max_norm,
             "pos_weight": config["training"]["pos_weight"],
+                        "edge_weights_1": config["training"]["edge_weights_1"],
+            "augment": config["training"]["augment"],
+            "augment_values": config["training"]["augment_values"],
+            "val_robust": config["val_robust"],
+            "smote": config["training"]["smote"],
         },
     )
 
@@ -134,7 +139,7 @@ def main(config: dict):
     save_config(config, wandb_dir, "stgcn.yaml")
 
 
-    model = STGCNClassifier(
+    model = STGCNClassifier_AttnPool(
         num_nodes=num_nodes,
         num_features=input_dim,
         num_classes=number_of_classes
