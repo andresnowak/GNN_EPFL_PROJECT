@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch_geometric.transforms import AddLaplacianEigenvectorPE
 
 import sys
-sys.path.append("/path/to/spaces")
+sys.path.append("/path/to/state-spaces")
 from models.s4.s4 import S4Block
 
 
