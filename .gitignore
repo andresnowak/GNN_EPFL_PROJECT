@@ -1,2 +1,7 @@
-data
+data/
+wandb/
+.nml/
+__pycache__/
 .DS_Store
+*.out
+outs/
