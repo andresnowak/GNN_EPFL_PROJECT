@@ -127,6 +127,11 @@ def main(config: dict):
             "input_dim": input_dim,
             "max_norm": max_norm,
             "pos_weight": config["training"]["pos_weight"],
+                        "edge_weights_1": config["training"]["edge_weights_1"],
+            "augment": config["training"]["augment"],
+            "augment_values": config["training"]["augment_values"],
+            "val_robust": config["val_robust"],
+            "smote": config["training"]["smote"],
         },
     )
 
