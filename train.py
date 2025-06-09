@@ -54,10 +54,9 @@ def main(args):
 
     DATA_ROOT = Path(args.data_path)
 
-    # Load the train, validation and test split.
+    # Load the train, validation split.
     clips_tr = pd.read_parquet("segments_train.parquet")
     clips_va = pd.read_parquet("segments_val.parquet")
-    clips_te = pd.read_parquet(DATA_ROOT / "test/segments.parquet")
 
     dataset_tr = EEGDataset(
     clips_tr,
@@ -71,21 +70,12 @@ def main(args):
         signals_root=DATA_ROOT / "train",
         signal_transform=utils.fft_filtering, # Frequency domain transformation
         prefetch=True,  # If your compute does not allow it, you can use `prefetch=False`
-    )
-
-    dataset_te = EEGDataset(
-        clips_te,
-        signals_root=DATA_ROOT / "test",  # Update this path if your test signals are stored elsewhere
-        signal_transform=utils.fft_filtering,  # Frequency domain transformation
-        prefetch=True,  # Set to False if prefetching causes memory issues on your compute environment
-        return_id=True,  # Return the id of each sample instead of the label
-    )    
+    )  
 
     # Initialize the data loaders
     batch_size = args.batch_size
     loader_tr = DataLoader(dataset_tr, batch_size=batch_size, shuffle=True)
     loader_va = DataLoader(dataset_va, batch_size=batch_size, shuffle=False)
-    loader_te = DataLoader(dataset_te, batch_size=batch_size, shuffle=False)
 
     # Compute the Distance Adjacency Matrix and make it sparse using threshold 0.9
     thresh = 0.9
@@ -225,13 +215,6 @@ def main(args):
     # Start the training of the model.
     train_model(model, clips_tr, loader_tr, loader_va, args, lr, device)
 
-    # Load the best model from args.best_ckpt_path
-    model.load_state_dict(torch.load(args.best_ckpt_path, map_location=device))  # Load the trained model weights
-    model.to(device)
-
-    # Generate the model's predictions on test set.
-    inference_model(model, loader_te, device)
-
 def train_model(model, clips_tr, loader_tr, loader_va, args, lr, device):
 
     # Calculate the class imbalance to be used in weighted loss.
@@ -323,43 +306,6 @@ def train_model(model, clips_tr, loader_tr, loader_va, args, lr, device):
 
         # Learning Rate Decay Step.
         scheduler.step()
-
-def inference_model(model, loader_te, device):
-
-    # Turn on the model's evaluation mode.
-    model.eval()
-
-    # Lists to store sample IDs and predictions
-    all_predictions = []
-    all_ids = []
-
-    # Disable gradient computation for inference
-    with torch.no_grad():
-        for batch in loader_te:
-            # Assume each batch returns a tuple (x_batch, sample_id)
-            # If your dataset does not provide IDs, you can generate them based on the batch index.
-            x_batch, x_ids = batch
-
-            # Move the input data to the device (GPU or CPU)
-            x_batch = x_batch.float().unsqueeze(-1).to(device)
-
-            # Perform the forward pass to get the model's output logits
-            logits = model(x_batch)
-
-            # Convert logits to predictions.
-            # 0.5 threshold used for binary classification.
-            predictions = (torch.sigmoid(logits) >= 0.5).int().cpu().numpy()
-
-            # Append predictions and corresponding IDs to the lists
-            all_predictions.extend(predictions.flatten().tolist())
-            all_ids.extend(list(x_ids))
-
-    # Create a DataFrame for Kaggle submission with the required format: "id,label"
-    submission_df = pd.DataFrame({"id": all_ids, "label": all_predictions})
-
-    # Save the DataFrame to a CSV file without an index
-    submission_df.to_csv("submission.csv", index=False)
-    print("Kaggle submission file generated")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
