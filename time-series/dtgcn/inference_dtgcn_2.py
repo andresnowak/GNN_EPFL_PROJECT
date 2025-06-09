@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import argparse
 from datetime import datetime
+import os
 
 from src.dtgcn_2 import DTGCN
 from src.utils import load_config, load_eeg_val_data, load_graph
@@ -15,6 +16,8 @@ from src.utils import load_config, load_eeg_val_data, load_graph
 
 def main(config, model_path):
     dir = "./outputs"
+
+    os.makedirs(dir, exist_ok=True)
 
 
     dataset_te= load_eeg_val_data(
