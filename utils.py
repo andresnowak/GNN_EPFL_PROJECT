@@ -1,7 +1,7 @@
 import numpy as np
 
 def fft_filtering(x: np.ndarray) -> np.ndarray:
-    """Compute FFT and only keep"""
+    """Compute FFT and only keep a band"""
     x = np.abs(np.fft.fft(x, axis=0))
     x = np.log(np.where(x > 1e-8, x, 1e-8))
     win_len = x.shape[0]

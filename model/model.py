@@ -129,14 +129,16 @@ class GCN2_LSTM_Model(nn.Module):
         self.register_buffer('edge_weight', edge_weight)
 
         # GCNConv layer from PyTorch Geometric
-        # Create separate GCNConv for each time step
+        # Create separate GCNConv for each time step -> Layer 1
         self.gcn_layers1 = nn.ModuleList([
             GCNConv(in_channels, gcn_hidden) for _ in range(seq_len)
         ])
+        # Create separate GCNConv for each time step -> Layer 2
         self.gcn_layers2 = nn.ModuleList([
             GCNConv(gcn_hidden, gcn_hidden) for _ in range(seq_len)
         ])
 
+        # Normalize the graph output
         self.norm1 = GraphNorm(gcn_hidden)
         self.norm2 = GraphNorm(gcn_hidden)
 
@@ -176,7 +178,8 @@ class GCN2_LSTM_Model(nn.Module):
                 self.edge_index,
                 edge_weight=self.edge_weight
             )  # [batch_size * num_nodes, gcn_hidden]
-            h = self.norm1(h)
+            h = self.norm1(h) # [batch_size * num_nodes, gcn_hidden]
+            # Skip connection
             h = F.relu(h + x_input)
 
             x_input2 = h
@@ -185,7 +188,8 @@ class GCN2_LSTM_Model(nn.Module):
                 self.edge_index,
                 edge_weight=self.edge_weight
             )  # [batch_size * num_nodes, gcn_hidden]
-            h2 = self.norm2(h2)
+            h2 = self.norm2(h2) # [batch_size * num_nodes, gcn_hidden]
+            # Skip connection
             h = F.relu(h2 + x_input2)
 
             # Restore batch dimension and flatten node embeddings
@@ -246,6 +250,7 @@ class GAT_LSTM_Model(nn.Module):
             GATConv(in_channels, gat_hidden, heads = num_heads) for _ in range(seq_len)
         ])
 
+        # Linear layer to project [gat_hidden * num_heads] to [gat_hidden]
         self.projector = nn.Linear(num_nodes * gat_hidden * num_heads, num_nodes * gat_hidden)
 
         # LSTM for temporal dependencies
@@ -272,8 +277,8 @@ class GAT_LSTM_Model(nn.Module):
 
         gat_seq = []
         for t in range(seq_len):
-            # Create batches.
 
+            # Create batches.
             graphs = []
             for i in range(batch_size):
                 graphs.append(Data(
@@ -282,13 +287,12 @@ class GAT_LSTM_Model(nn.Module):
             ))
             batch_graph = Batch.from_data_list(graphs)
 
-            #x_t = x[:, t, :, :].reshape(-1, in_channels)  # [batch_size * num_nodes, in_channels]
-            # Apply GATConv with edge_index and edge_weight
+            # Apply GATConv with edge_index.
             gat = self.gat_layers[t]
             h = gat(
                 batch_graph.x,
                 batch_graph.edge_index,
-            )  # [batch_size * num_nodes, gat_hidden]
+            )  # [batch_size * num_nodes, gat_hidden * num_heads]
             h  = F.relu(h)
             # Restore batch dimension and flatten node embeddings
             h = h.reshape(batch_size, num_nodes * self.gat_hidden * self.num_heads)
@@ -346,19 +350,23 @@ class GAT2_LSTM_Model(nn.Module):
         self.register_buffer('edge_weight', edge_weight)
 
         # GATConv layer from PyTorch Geometric
-        # Create separate GATConv for each time step
+        # Create separate GATConv for each time step -> Layer 1
         self.gat_layers1 = nn.ModuleList([
             GATConv(in_channels, int(gat_hidden/num_heads), heads = num_heads) for _ in range(seq_len)
         ])
 
+        # Normalize the graph output
         self.norm1 = GraphNorm(gat_hidden)
 
+        # Create separate GATConv for each time step -> Layer 2
         self.gat_layers2 = nn.ModuleList([
             GATConv(gat_hidden, gat_hidden, heads = num_heads) for _ in range(seq_len)
         ])
 
+        # Normalize the graph output
         self.norm2 = GraphNorm(gat_hidden * num_heads)
 
+        # Linear layer to project [gat_hidden * num_heads] to [gat_hidden]
         self.projector = nn.Linear(num_nodes * gat_hidden * num_heads, num_nodes * gat_hidden)
 
         # LSTM for temporal dependencies
@@ -385,8 +393,8 @@ class GAT2_LSTM_Model(nn.Module):
 
         gat_seq = []
         for t in range(seq_len):
-            # Create batches.
 
+            # Create batches.
             graphs = []
             for i in range(batch_size):
                 graphs.append(Data(
@@ -395,8 +403,7 @@ class GAT2_LSTM_Model(nn.Module):
             ))
             batch_graph = Batch.from_data_list(graphs)
 
-            #x_t = x[:, t, :, :].reshape(-1, in_channels)  # [batch_size * num_nodes, in_channels]
-            # Apply GATConv with edge_index and edge_weight
+            # Apply GATConv with edge_index
             gat1 = self.gat_layers1[t]
             gat2 = self.gat_layers2[t]
 
@@ -406,13 +413,14 @@ class GAT2_LSTM_Model(nn.Module):
                 batch_graph.edge_index,
             )  # [batch_size * num_nodes, gat_hidden]
             h = self.norm1(h, batch_graph.batch)
+            # Skip connection
             h = F.relu(h + x_input)
             
             x_input = h
             h = gat2(
                 h,
                 batch_graph.edge_index,
-            )  # [batch_size * num_nodes, gat_hidden]
+            )  # [batch_size * num_nodes, gat_hidden * num_heads]
             h = self.norm2(h, batch_graph.batch)
 
             # Restore batch dimension and flatten node embeddings
