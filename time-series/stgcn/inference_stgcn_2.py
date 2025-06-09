@@ -9,7 +9,7 @@ import re
 import argparse
 from datetime import datetime
 
-from src.stgcn import STGCNClassifier_2, get_normalized_adj
+from src.stgcn import STGCNClassifier, get_normalized_adj
 from src.utils import load_config, load_eeg_val_data, load_graph
 
 
@@ -57,7 +57,7 @@ def main(config, model_path):
     input_dim = config["model"]["input_dim"]
     number_of_classes = 1
 
-    model = STGCNClassifier_2(
+    model = STGCNClassifier(
         num_nodes=num_nodes, 
         num_features=input_dim,
         num_classes=number_of_classes
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         help="Path to model",
-        default="wandb/run-20250604_191105-2l44wlf3/files/best_stgcn_2_model.pth",
+        default="wandb/run-20250601_155315-eleb96hp/files/best_stgcn_model.pth",
     )
 
     args = parser.parse_args()

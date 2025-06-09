@@ -89,7 +89,7 @@ def main(config: dict):
 
     # Load distances of nodes
     edge_index, edge_weight = load_graph(
-        config["data_path"], config["distances_csv_file"]
+        config["data_path"], config["distances_csv_file"], config["training"]["edge_weights_1"]
     )
     edge_index = edge_index
     edge_weight = edge_weight
@@ -127,6 +127,11 @@ def main(config: dict):
             "input_dim": input_dim,
             "max_norm": max_norm,
             "pos_weight": config["training"]["pos_weight"],
+            "edge_weights_1": config["training"]["edge_weights_1"],
+            "augment": config["training"]["augment"],
+            "augment_values": config["training"]["augment_values"],
+            "val_robust": config["val_robust"],
+            "smote": config["training"]["smote"],
         },
     )
 
@@ -134,7 +139,7 @@ def main(config: dict):
     save_config(config, wandb_dir, "stgcn.yaml")
 
 
-    model = STGCNClassifier(
+    model = STGCNClassifier_2(
         num_nodes=num_nodes,
         num_features=input_dim,
         num_classes=number_of_classes
