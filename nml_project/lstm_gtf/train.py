@@ -123,7 +123,7 @@ for u, v in edges:
 edge_weight = torch.tensor(edge_weights, dtype=torch.float32).unsqueeze(-1).to(device)
 edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous().to(device)
 
-epochs = 2
+epochs = 300
 lr = 3e-5
 weight_decay = 1e-5
 lstm_hidden_dim = 128
@@ -206,7 +206,7 @@ if normalization:
     if log_wandb:
         torch.save(normalization_stats, os.path.join(wandb.run.dir, "normalization_stats.pth"))
     else:
-        torch.save(normalization_stats, os.path.join(script_dir, "normalization_stats.pth")
+        torch.save(normalization_stats, os.path.join(script_dir, "normalization_stats.pth"))
     epsilon = 1e-8
 
 print("Starting training loop...")

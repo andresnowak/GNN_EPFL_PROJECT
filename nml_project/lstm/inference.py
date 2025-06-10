@@ -21,7 +21,7 @@ args = parser.parse_args()
 model_path = args.model
 
 DATA_ROOT_TEST = Path(os.path.join(script_dir, "..", "data", "test"))
-clips_te = pd.read_parquet(DATA_ROOT_TEST / "test/segments.parquet")
+clips_te = pd.read_parquet(DATA_ROOT_TEST / "segments.parquet")
 
 bp_filter = signal.butter(4, (0.5, 30), btype="bandpass", output="sos", fs=250)
 

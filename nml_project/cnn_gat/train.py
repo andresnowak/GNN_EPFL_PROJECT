@@ -123,7 +123,7 @@ for u, v in edges:
 edge_weight = torch.tensor(edge_weights, dtype=torch.float32).to(device)
 edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous().to(device)
 
-epochs = 1
+epochs = 200
 lr = 5e-5
 weight_decay = 1e-5
 cnn_out_dim = 256
