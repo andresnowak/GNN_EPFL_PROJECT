@@ -23,7 +23,7 @@ from models import STGCNClassifier_AttnPool, get_normalized_adj
 
 
 def main(config, model_path):
-    config["data_path"] = parent_dir.parent / "data"
+    config["data_path"] = parent_dir / "data"
 
 
     dataset_te= load_eeg_val_data(

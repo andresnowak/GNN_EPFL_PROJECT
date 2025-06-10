@@ -65,7 +65,7 @@ def seed_everything(seed: int):
 def main(config: dict):
     seed_everything(config["seed"])
 
-    config["data_path"] = parent_dir.parent / "data"
+    config["data_path"] = parent_dir / "data"
 
     dataset_tr, dataset_val, train_df = load_eeg_data(
         config["data_path"],
