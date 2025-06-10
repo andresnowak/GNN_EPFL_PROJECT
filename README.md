@@ -42,8 +42,10 @@ This repo contains these models:
 *   S4 
 *   S4 + GCN
 *   S4 + GAT
-*   DCRNN (Distance DCRNN and Correlation DCRNN)
-*   GNN + LSTM (GCN + LSTM, GAT + LSTM)
+*   Distance DCRNN
+*   Correlation DCRNN
+*   GCN + LSTM
+*   GAT + LSTM
 
 ## Inference
 
@@ -85,4 +87,4 @@ For S4, S4 + GCN, S4 + GAT - https://drive.google.com/drive/folders/10tZ6OtLPOFx
 
 For STGCN and Resnet LSTM - https://drive.google.com/drive/u/0/folders/15rc7KJ-a0dDGIbac6jVJmRPPm03uIrrH
 
-For DCRNN (Distance DCRNN and Correlation DCRNN), GNN_LSTM (GCN + LSTM and GAT + LSTM) - https://drive.google.com/drive/folders/1-Pe-KoBPkV4kKo4ti0O4lKSI2tYhxs97?usp=sharing
+For Distance DCRNN, Correlation DCRNN, GCN + LSTM, GAT + LSTM - https://drive.google.com/drive/folders/1-Pe-KoBPkV4kKo4ti0O4lKSI2tYhxs97?usp=sharing
