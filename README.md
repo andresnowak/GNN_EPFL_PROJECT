@@ -2,6 +2,18 @@
 
 This is the code for the course project in EE-452 (Network Machine Learning).
 
+## Data
+First make sure you have the data inside nml_project folder
+
+data
+├── train
+│   ├── signals/
+│   ├── segments.parquet
+│-- test
+     ├── signals/
+     ├── segments.parquet
+
+
 ## Installation instructions
 
 First create a conda environment with python 3.11.12.
@@ -63,3 +75,5 @@ wandb login
 ## Download Links
 
 For LSTM, GAT, LSTM + GCN, LSTM + GAT, LSTM + GraphTransformer, CNN + GAT - https://drive.google.com/drive/folders/1qUHm-iL-1SH-mw-PkawRmklAVrRn1pH9?usp=sharing
+
+For STGCN and Resnet LSTM - https://drive.google.com/drive/u/0/folders/15rc7KJ-a0dDGIbac6jVJmRPPm03uIrrH

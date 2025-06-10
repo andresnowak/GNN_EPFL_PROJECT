@@ -5,9 +5,9 @@ seed: 1
 
 # --- Data Settings ---
 data_path: "../../data" # Relative or absolute path to the data directory
-train_parquet_file: "train/segments_train.parquet"
-val_parquet_file: "train/segments_val.parquet"
-distances_csv_file: "distances_3d.csv"
+train_parquet_file: "../segments_train.parquet"
+val_parquet_file: "../segments_val.parquet"
+distances_csv_file: "../distances_3d.csv"
 val_split_size: 0.1 # Proportion of training data to use for validation
 val_robust: True
 
