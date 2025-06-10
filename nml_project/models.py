@@ -7,10 +7,6 @@ import torch.nn.functional as F
 from torch_geometric.transforms import AddLaplacianEigenvectorPE
 from collections import deque
 from pathlib import Path
-
-import sys
-models_dir = Path(__file__).parent.absolute()  # Folder containing this script
-sys.path.append(str(models_dir.parent)) 
 from s4.models.s4.s4 import S4Block
 
 
