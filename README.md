@@ -39,6 +39,9 @@ This repo contains these models:
 *   Resnet LSTM
 *   DTGCN
 *   TGCN
+*   S4 
+*   S4 + GCN
+*   S4 + GAT
 
 ## Inference
 
@@ -75,5 +78,7 @@ wandb login
 ## Download Links
 
 For LSTM, GAT, LSTM + GCN, LSTM + GAT, LSTM + GraphTransformer, CNN + GAT - https://drive.google.com/drive/folders/1qUHm-iL-1SH-mw-PkawRmklAVrRn1pH9?usp=sharing
+
+For S4, S4 + GCN, S4 + GAT - https://drive.google.com/drive/folders/10tZ6OtLPOFxnhR_BfsiJ_PhQkXdrSoT0?usp=sharing
 
 For STGCN and Resnet LSTM - https://drive.google.com/drive/u/0/folders/15rc7KJ-a0dDGIbac6jVJmRPPm03uIrrH
