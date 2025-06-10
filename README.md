@@ -16,12 +16,12 @@ Each model has a separate subdirectory which has a train and an inference script
 
 This repo contains these models:
 
-*   LSTM_GAT
-*   LSTM_GCN
-*   LSTM_GTF
+*   LSTM + GAT
+*   LSTM + GCN
+*   LSTM + GraphTransformer
 *   LSTM
 *   GAT
-*   CNN_GAT
+*   CNN + GAT
 *   STGCN avg pooling
 *   STGCN attn pooling
 *   Resnet lstm
@@ -30,7 +30,7 @@ This repo contains these models:
 
 ## Inference
 
-To run inference, first download the trained model weights from the provided Google Drive links (you will provide these links separately).
+To run inference, first download the trained model weights from the provided Google Drive links given below.
 
 Then, navigate to the `nml_project` directory and execute the corresponding `inference.py` script, providing the path to the downloaded model weights using the `--model` argument.
 
@@ -59,3 +59,7 @@ Note: Some training scripts are configured to log metrics to Weights & Biases (w
 ```bash
 wandb login
 ```
+
+## Download Links
+
+For LSTM, GAT, LSTM + GCN, LSTM + GAT, LSTM + GraphTransformer, CNN + GAT - https://drive.google.com/drive/folders/1qUHm-iL-1SH-mw-PkawRmklAVrRn1pH9?usp=sharing

@@ -18,7 +18,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(script_dir, '..'))
 from models import LSTM_GCN
 
-log_wandb = True
+log_wandb = False
 
 def seed_everything(seed: int):
     random.seed(seed)
