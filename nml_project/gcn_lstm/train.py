@@ -18,11 +18,11 @@ import utils
 import sys
 script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(script_dir, '..'))
-from models import GCN_LSTM_Model, GCN2_LSTM_Model, GAT_LSTM_Model, GAT2_LSTM_Model
+from models import GCN_LSTM_Model, GCN2_LSTM_Model
 
 ########### CONFIG ################
 wandblog = False # If you want to log the results of wandb
-graph_type = 'gcnlstm' # Change it to 'gcn2lstm' or 'gatlstm' or 'gat2lstm'
+graph_type = 'gcnlstm' # Change it to 'gcnlstm' or 'gcn2lstm'
 ########### CONFIG ################
 
 def train_model(model, clips_tr, loader_tr, loader_va, num_epochs, lr, device):
@@ -244,69 +244,6 @@ if graph_type == 'gcnlstm' or graph_type == 'gcn2lstm':
             "weighted_loss": weighted_loss,
             "seq_len": seq_len,
             "gradient_clip": gradient_clip
-        })
-
-# For initializing the model with GAT_LSTM.
-# gatlstm = one layer of gat is used per time step.
-# gat2lstm = two layers of gat are used per time step.
-elif graph_type == 'gatlstm' or graph_type == 'gat2lstm':
-
-    # Best Configuration of gatlstm
-    gat_hidden = 16 # The output dimension of one head of gat.
-    lstm_hidden = 64 # The hidden variable dimension of lstm.
-    lstm_layers = 3 # Number of lstm layers.
-    dropout = 0 # Amount of dropout.
-    lr = 2e-4 # Learning rate.
-    num_heads = 3 # Number of heads in gat.
-
-    if graph_type == 'gatlstm':
-        model = GAT_LSTM_Model(
-                num_nodes,
-                in_channels,
-                gat_hidden,
-                lstm_hidden,
-                output_dim,
-                lstm_layers,
-                num_heads,
-                dropout,
-                seq_len,
-                torch.from_numpy(A)
-                ).to(device)
-        
-    elif graph_type == 'gat2lstm':
-        # Best Configuration of gat2lstm
-        gat_hidden = 8 # The output dimension of one head of gat.
-        lstm_hidden = 128 # The hidden variable dimension of lstm.
-        dropout = 0.2 # Amount of dropout.
-        num_heads = 2 # Number of heads in gat to make it divisible by gat_hidden
-        model = GAT2_LSTM_Model(
-                num_nodes,
-                in_channels,
-                gat_hidden,
-                lstm_hidden,
-                output_dim,
-                lstm_layers,
-                num_heads,
-                dropout,
-                seq_len,
-                torch.from_numpy(A)
-                ).to(device)
-        
-    if wandblog:
-        wandb.init(project="gat-lstm", config={
-            "num_nodes": num_nodes,
-            "in_channels": in_channels,
-            "gat_hidden": gat_hidden,
-            "lstm_hidden": lstm_hidden,
-            "lstm_layers": lstm_layers,
-            "epochs": num_epochs,
-            "lr": lr,
-            "dropout": dropout,
-            "batch_size": batch_size,
-            "weighted_loss": weighted_loss,
-            "seq_len": seq_len,
-            "gradient_clip": gradient_clip,
-            "num_heads": num_heads,
         })
 
 print('Number of trainable parameters:', sum(p.numel() for p in model.parameters() if p.requires_grad))

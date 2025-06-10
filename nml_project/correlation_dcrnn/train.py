@@ -21,98 +21,8 @@ from models import DCRNNModel_classification
 
 ########### CONFIG ################
 log_wandb = False # If you want to log the results of wandb
-graph_type = 'distance' # Change it to 'correlation' if you wan to run Correlation DCRNN
+graph_type = 'correlation'
 ########### CONFIG ################
-
-def train_distance_graph(model, loader_tr, loader_va, num_epochs, lr, device):
-
-    epochs = num_epochs # Total epochs.
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr) # Adam Optimizer used.
-    scheduler = CosineAnnealingLR(optimizer, T_max=epochs) # Learning rate decay.
-    criterion = nn.BCEWithLogitsLoss() # Binary Cross Entropy Loss.
-
-    train_losses = []
-    best_ckpt_path = os.path.join(script_dir, "best_distance_dcrnn_model.pth")
-    global_step = 0
-    best_macrof1 = 0.0 # Store the best Macro F1 score.
-
-    # Compute the Distance Adjacency Matrix and make it sparse using threshold 0.9
-    thresh = 0.9
-    dist_df = pd.read_csv('distances_3d.csv')
-    A = utils.get_adjacency_matrix(dist_df, INCLUDED_CHANNELS, dist_k=thresh)
-
-    # Compute the supports (ChebNet graph conv)
-    filter_type = 'laplacian'
-    supports = utils.compute_supports(A, filter_type)
-    supports = [support.to(device) for support in supports]
-
-    for epoch in tqdm(range(epochs), desc="Training"):
-
-        # Turn on the model's training mode.
-        model.train()
-        running_loss = 0.0
-
-        # Per epoch training loop
-        for x_batch, y_batch in loader_tr:
-            seq_lengths = torch.ones(x_batch.shape[0], dtype=torch.long).to(device)*354
-            x_batch = x_batch.float().unsqueeze(-1).to(device)
-            y_batch = y_batch.float().unsqueeze(1).to(device)
-            logits = model(x_batch, seq_lengths, supports)
-            loss = criterion(logits, y_batch)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item()
-            # Log the loss to wandb.
-            if log_wandb:
-                wandb.log({"loss": loss.item(), "global_step": global_step})
-            print(f"Step {global_step}, Loss: {loss.item():.4f}")
-            global_step += 1
-
-        avg_loss = running_loss / len(loader_tr)
-        train_losses.append(avg_loss)
-
-        # Evaluation phase on validation data.
-
-        # Turn on the model's evaluation mode.
-        model.eval()
-
-        with torch.no_grad():
-            y_pred_all = []
-            y_true_all = []
-            for x_batch, y_batch in loader_va:
-                x_batch = x_batch.float().unsqueeze(-1).to(device)
-                y_batch = y_batch.float().unsqueeze(1).to(device)
-                seq_lengths = torch.ones(x_batch.shape[0], dtype=torch.long).to(device)*354
-                logits = model(x_batch, seq_lengths, supports)
-
-                # 0.5 threshold used for binary classification.
-                preds = torch.sigmoid(logits) >= 0.5
-                y_pred_all.append(preds)
-                y_true_all.append(y_batch.bool())
-
-        # Calculate the MacroF1 score on the validation set.
-        y_pred_all = torch.flatten(torch.concatenate(y_pred_all, axis = 0))
-        y_true_all = torch.flatten(torch.concatenate(y_true_all, axis = 0))
-        macrof1 = f1_score(y_true_all.cpu(), y_pred_all.cpu(), average='macro')
-
-        # Track the validation macrof1 to know overfitting or underfitting.
-        print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}, Macrof1: {macrof1:.4f}")
-
-        if log_wandb:
-            wandb.log({"loss": avg_loss, "Macrof1": macrof1, "epoch": epoch + 1})
-        
-        # Save model if best accuracy so far
-        if macrof1 > best_macrof1:
-            best_macrof1 = macrof1
-            torch.save(model.state_dict(), best_ckpt_path)
-            print(f"✅ New best model saved with macrof1: {macrof1:.4f}")
-
-        # Learning Rate Decay Step.
-        scheduler.step()
-
-    if log_wandb:  
-        wandb.finish()
 
 def train_correlation_graph(model, loader_tr, loader_va, num_epochs, lr, device):
     
@@ -267,7 +177,7 @@ batch_size = 128
 loader_tr = DataLoader(dataset_tr, batch_size=batch_size, shuffle=True)
 loader_va = DataLoader(dataset_va, batch_size=batch_size, shuffle=False)
 
-# Best Configuration of both Correlation and Distance Graph defined below.
+# Best Configuration of Correlation Graph defined below.
 # Initialize the model parameters.
 num_epochs = 100 # Total epochs.
 num_nodes = 19 # Number of electrodes.
@@ -298,12 +208,9 @@ if log_wandb:
         "batch_size": batch_size
     })
 
-# Distance Graphs are undirected, hence we chose 'laplacian' for diffusion steps.
-if graph_type == 'distance':
-    filter_type = 'laplacian'
+
 # Correlation Graphs are directed, hence we chose 'bidirectional random walk' for diffusion steps.
-elif graph_type == 'correlation':
-    filter_type = 'dual_random_walk'
+filter_type = 'dual_random_walk'
 
 model = DCRNNModel_classification(
     input_dim=input_dim,
@@ -319,8 +226,5 @@ model = DCRNNModel_classification(
 ).to(device)
 print('Number of trainable parameters:', sum(p.numel() for p in model.parameters() if p.requires_grad))
 
-# Different training modules for distance adjacency matrix vs correlation adjacency matrix
-if graph_type == 'distance':
-    train_distance_graph(model, loader_tr, loader_va, num_epochs, lr, device)
-elif graph_type == 'correlation':
-    train_correlation_graph(model, loader_tr, loader_va, num_epochs, lr, device)
+# Training
+train_correlation_graph(model, loader_tr, loader_va, num_epochs, lr, device)

@@ -15,61 +15,13 @@ sys.path.append(os.path.join(script_dir, '..'))
 from models import DCRNNModel_classification
 
 ########### CONFIG ################
-graph_type = 'distance' # Change it to 'correlation' if you want to infer Correlation DCRNN
+graph_type = 'correlation'
 ########### CONFIG ################
 
 parser = argparse.ArgumentParser(description="Run inference on the DCRNN model.")
 parser.add_argument('--model', type=str, required=True, help='Model path')
 args = parser.parse_args()
 model_ckpt_path = args.model
-
-def inference_distance_graph(model, loader_te, device):
-    
-    # Turn on the model's evaluation mode.
-    model.eval()
-
-    # Compute the Distance Adjacency Matrix and make it sparse using threshold 0.9
-    thresh = 0.9
-    dist_df = pd.read_csv('distances_3d.csv')
-    A = utils.get_adjacency_matrix(dist_df, INCLUDED_CHANNELS, dist_k=thresh)
-
-    # Compute the supports (ChebNet graph conv)
-    filter_type = 'laplacian'
-    supports = utils.compute_supports(A, filter_type)
-    supports = [support.to(device) for support in supports]
-
-    # Lists to store sample IDs and predictions
-    all_predictions = []
-    all_ids = []
-
-    # Disable gradient computation for inference
-    with torch.no_grad():
-        for batch in loader_te:
-            # Assume each batch returns a tuple (x_batch, sample_id)
-            # If your dataset does not provide IDs, you can generate them based on the batch index.
-            x_batch, x_ids = batch
-
-            # Move the input data to the device (GPU or CPU)
-            x_batch = x_batch.float().to(device)
-
-            # Perform the forward pass to get the model's output logits
-            seq_lengths = torch.ones(x_batch.shape[0], dtype=torch.long).to(device)*354
-            logits = model(x_batch, seq_lengths, supports)
-
-            # Convert logits to predictions.
-            # 0.5 threshold used for binary classification.
-            predictions = (torch.sigmoid(logits) >= 0.5).int().cpu().numpy()
-
-            # Append predictions and corresponding IDs to the lists
-            all_predictions.extend(predictions.flatten().tolist())
-            all_ids.extend(list(x_ids))
-
-    # Create a DataFrame for Kaggle submission with the required format: "id,label"
-    submission_df = pd.DataFrame({"id": all_ids, "label": all_predictions})
-
-    # Save the DataFrame to a CSV file without an index
-    submission_df.to_csv(os.path.join(script_dir, "submission.csv"), index=False)
-    print(f"Submission file saved as {os.path.join(script_dir, 'submission.csv')}")
 
 def inference_correlation_graph(model, loader_te, device):
     
@@ -165,7 +117,7 @@ dataset_te = EEGDataset(
 batch_size = 128
 loader_te = DataLoader(dataset_te, batch_size=batch_size, shuffle=False)
 
-# Best Configuration of both Correlation and Distance Graph defined below.
+# Best Configuration of Correlation Graph defined below.
 # Initialize the model parameters.
 num_nodes = 19 # Number of electrodes.
 rnn_units = 64 # The hidden variable dimension of gru.
@@ -177,12 +129,9 @@ dcgru_activation = 'tanh'
 dropout = 0 # Amount of dropout.
 lr = 1e-3 # Learning rate.
 
-# Distance Graphs are undirected, hence we chose 'laplacian' for diffusion steps.
-if graph_type == 'distance':
-    filter_type = 'laplacian'
+
 # Correlation Graphs are directed, hence we chose 'bidirectional random walk' for diffusion steps.
-elif graph_type == 'correlation':
-    filter_type = 'dual_random_walk'
+filter_type = 'dual_random_walk'
 
 model = DCRNNModel_classification(
     input_dim=input_dim,
@@ -203,7 +152,4 @@ model.load_state_dict(torch.load(model_ckpt_path, map_location=device))  # Load 
 model.to(device)
 
 # Generate the model's predictions on test set.
-if graph_type == 'distance':
-    inference_distance_graph(model, loader_te, device)
-elif graph_type == 'correlation':
-    inference_correlation_graph(model, loader_te, device)
+inference_correlation_graph(model, loader_te, device)
