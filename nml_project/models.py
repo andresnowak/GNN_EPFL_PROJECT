@@ -8,8 +8,8 @@ from torch_geometric.transforms import AddLaplacianEigenvectorPE
 from collections import deque
 
 import sys
-sys.path.append("/path/to/state-spaces")
-from models.s4.s4 import S4Block
+sys.path.append("../s4")
+from s4.models.s4.s4 import S4Block
 
 
 class GAT(nn.Module):

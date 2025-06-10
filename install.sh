@@ -6,3 +6,5 @@ pip install --extra-index-url https://download.pytorch.org/whl/cu118 torch==2.7.
 
 # Install everything else
 pip install -r requirements.txt
+
+git clone https://github.com/state-spaces/s4
