@@ -4,7 +4,7 @@ This is the code for the course project in EE-452 (Network Machine Learning).
 
 ## Data
 First make sure you have the data inside nml_project folder
-
+```
 data 
 ├── train 
 │   ├── signals/
@@ -12,7 +12,7 @@ data
 │-- test
      ├── signals/
      ├── segments.parquet
-
+```
 
 ## Installation instructions
 
