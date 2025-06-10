@@ -1732,3 +1732,802 @@ class DTGCN(nn.Module):
         logits = self.classifier(final_h_reshaped)  # [B, num_classes]
 
         return logits
+
+
+# ---- DCRNN -----
+
+# code form https://github.com/tsy935/eeg-gnn-ssl/blob/main/model/model.py
+
+class DiffusionGraphConv(nn.Module):
+    def __init__(self, num_supports, input_dim, hid_dim, num_nodes,
+                 max_diffusion_step, output_dim, bias_start=0.0,
+                 filter_type='laplacian'):
+        """
+        Diffusion graph convolution
+        Args:
+            num_supports: number of supports, 1 for 'laplacian' filter and 2
+                for 'dual_random_walk'
+            input_dim: input feature dim
+            hid_dim: hidden units
+            num_nodes: number of nodes in graph
+            max_diffusion_step: maximum diffusion step
+            output_dim: output feature dim
+            filter_type: 'laplacian' for undirected graph, and 'dual_random_walk'
+                for directed graph
+        """
+        super(DiffusionGraphConv, self).__init__()
+        num_matrices = num_supports * max_diffusion_step + 1
+        self._input_size = input_dim + hid_dim
+        self._num_nodes = num_nodes
+        self._max_diffusion_step = max_diffusion_step
+        self._filter_type = filter_type
+        self.weight = nn.Parameter(
+            torch.FloatTensor(
+                size=(
+                    self._input_size *
+                    num_matrices,
+                    output_dim)))
+        self.biases = nn.Parameter(torch.FloatTensor(size=(output_dim,)))
+
+        # Initialize with normally distributed parameters
+        nn.init.xavier_normal_(self.weight.data, gain=1.414)
+        nn.init.constant_(self.biases.data, val=bias_start)
+
+    @staticmethod
+    def _concat(x, x_):
+        x_ = torch.unsqueeze(x_, 1)
+        return torch.cat([x, x_], dim=1)
+
+    @staticmethod
+    def _build_sparse_matrix(L):
+        """
+        build pytorch sparse tensor from scipy sparse matrix
+        reference: https://stackoverflow.com/questions/50665141
+        """
+        shape = L.shape
+        i = torch.LongTensor(np.vstack((L.row, L.col)).astype(int))
+        v = torch.FloatTensor(L.data)
+        return torch.sparse.FloatTensor(i, v, torch.Size(shape))
+
+    def forward(self, supports, inputs, state, output_size, bias_start=0.0):
+        # Reshape input and state to (batch_size, num_nodes,
+        # input_dim/hidden_dim)
+        batch_size = inputs.shape[0]
+        inputs = torch.reshape(inputs, (batch_size, self._num_nodes, -1))
+        state = torch.reshape(state, (batch_size, self._num_nodes, -1))
+        # (batch, num_nodes, input_dim+hidden_dim)
+        inputs_and_state = torch.cat([inputs, state], dim=2)
+        input_size = self._input_size
+
+        x0 = inputs_and_state  # (batch, num_nodes, input_dim+hidden_dim)
+        # (batch, 1, num_nodes, input_dim+hidden_dim)
+        x = torch.unsqueeze(x0, dim=1)
+
+        if self._max_diffusion_step == 0:
+            pass
+        else:
+            for support in supports:
+                # (batch, num_nodes, input_dim+hidden_dim)
+                x1 = torch.matmul(support, x0)
+                # (batch, _, num_nodes, input_dim+hidden_dim)
+                x = self._concat(x, x1)
+                for k in range(2, self._max_diffusion_step + 1):
+                    # (batch, num_nodes, input_dim+hidden_dim)
+                    x2 = 2 * torch.matmul(support, x1) - x0
+                    x = self._concat(
+                        x, x2)  # (batch, _, num_nodes, input_dim+hidden_dim)
+                    x1, x0 = x2, x1
+
+        num_matrices = len(supports) * \
+            self._max_diffusion_step + 1  # Adds for x itself
+        # (batch, num_nodes, num_matrices, input_hidden_size)
+        x = torch.transpose(x, dim0=1, dim1=2)
+        # (batch, num_nodes, input_hidden_size, num_matrices)
+        x = torch.transpose(x, dim0=2, dim1=3)
+        x = torch.reshape(
+            x,
+            shape=[
+                batch_size,
+                self._num_nodes,
+                input_size *
+                num_matrices])
+        x = torch.reshape(
+            x,
+            shape=[
+                batch_size *
+                self._num_nodes,
+                input_size *
+                num_matrices])
+        # (batch_size * self._num_nodes, output_size)
+        x = torch.matmul(x, self.weight)
+        x = torch.add(x, self.biases)
+        return torch.reshape(x, [batch_size, self._num_nodes * output_size])
+    
+
+class DCGRUCell(nn.Module):
+    """
+    Graph Convolution Gated Recurrent Unit Cell.
+    """
+
+    def __init__(
+            self,
+            input_dim,
+            num_units,
+            max_diffusion_step,
+            num_nodes,
+            filter_type="laplacian",
+            nonlinearity='tanh',
+            use_gc_for_ru=True):
+        """
+        Args:
+            input_dim: input feature dim
+            num_units: number of DCGRU hidden units
+            max_diffusion_step: maximum diffusion step
+            num_nodes: number of nodes in the graph
+            filter_type: 'laplacian' for undirected graph, 'dual_random_walk' for directed graph
+            nonlinearity: 'tanh' or 'relu'. Default is 'tanh'
+            use_gc_for_ru: decide whether to use graph convolution inside rnn. Default True
+        """
+        super(DCGRUCell, self).__init__()
+        self._activation = torch.tanh if nonlinearity == 'tanh' else torch.relu
+        self._num_nodes = num_nodes
+        self._num_units = num_units
+        self._max_diffusion_step = max_diffusion_step
+        self._use_gc_for_ru = use_gc_for_ru
+        if filter_type == "laplacian":  # ChebNet graph conv
+            self._num_supports = 1
+        elif filter_type == "random_walk":  # Forward random walk
+            self._num_supports = 1
+        elif filter_type == "dual_random_walk":  # Bidirectional random walk
+            self._num_supports = 2
+        else:
+            self._num_supports = 1
+
+        self.dconv_gate = DiffusionGraphConv(
+            num_supports=self._num_supports,
+            input_dim=input_dim,
+            hid_dim=num_units,
+            num_nodes=num_nodes,
+            max_diffusion_step=max_diffusion_step,
+            output_dim=num_units * 2,
+            filter_type=filter_type)
+        self.dconv_candidate = DiffusionGraphConv(
+            num_supports=self._num_supports,
+            input_dim=input_dim,
+            hid_dim=num_units,
+            num_nodes=num_nodes,
+            max_diffusion_step=max_diffusion_step,
+            output_dim=num_units,
+            filter_type=filter_type)
+
+    @property
+    def output_size(self):
+        output_size = self._num_nodes * self._num_units
+        return output_size
+
+    def forward(self, supports, inputs, state):
+        """
+        Args:
+            inputs: (B, num_nodes * input_dim)
+            state: (B, num_nodes * num_units)
+        Returns:
+            output: (B, num_nodes * output_dim)
+            state: (B, num_nodes * num_units)
+        """
+        output_size = 2 * self._num_units
+        if self._use_gc_for_ru:
+            fn = self.dconv_gate
+        else:
+            fn = self._fc
+        value = torch.sigmoid(
+            fn(supports, inputs, state, output_size, bias_start=1.0))
+        value = torch.reshape(value, (-1, self._num_nodes, output_size))
+        r, u = torch.split(
+            value, split_size_or_sections=int(
+                output_size / 2), dim=-1)
+        r = torch.reshape(r, (-1, self._num_nodes * self._num_units))
+        u = torch.reshape(u, (-1, self._num_nodes * self._num_units))
+        # batch_size, self._num_nodes * output_size
+        c = self.dconv_candidate(supports, inputs, r * state, self._num_units)
+        if self._activation is not None:
+            c = self._activation(c)
+        output = new_state = u * state + (1 - u) * c
+
+        return output, new_state
+
+    @staticmethod
+    def _concat(x, x_):
+        x_ = torch.unsqueeze(x_, 0)
+        return torch.cat([x, x_], dim=0)
+
+    def _gconv(self, supports, inputs, state, output_size, bias_start=0.0):
+        pass
+
+    def _fc(self, supports, inputs, state, output_size, bias_start=0.0):
+        pass
+
+    def init_hidden(self, batch_size):
+        # state: (B, num_nodes * num_units)
+        return torch.zeros(batch_size, self._num_nodes * self._num_units)
+
+
+
+class DCRNNEncoder(nn.Module):
+    def __init__(self, input_dim, max_diffusion_step,
+                 hid_dim, num_nodes, num_rnn_layers,
+                 dcgru_activation=None, filter_type='laplacian',
+                 device=None):
+        super(DCRNNEncoder, self).__init__()
+        self.hid_dim = hid_dim
+        self.num_rnn_layers = num_rnn_layers
+        self._device = device
+
+        encoding_cells = list()
+        # the first layer has different input_dim
+        encoding_cells.append(
+            DCGRUCell(
+                input_dim=input_dim,
+                num_units=hid_dim,
+                max_diffusion_step=max_diffusion_step,
+                num_nodes=num_nodes,
+                nonlinearity=dcgru_activation,
+                filter_type=filter_type))
+
+        # construct multi-layer rnn
+        for _ in range(1, num_rnn_layers):
+            encoding_cells.append(
+                DCGRUCell(
+                    input_dim=hid_dim,
+                    num_units=hid_dim,
+                    max_diffusion_step=max_diffusion_step,
+                    num_nodes=num_nodes,
+                    nonlinearity=dcgru_activation,
+                    filter_type=filter_type))
+        self.encoding_cells = nn.ModuleList(encoding_cells)
+
+    def forward(self, inputs, initial_hidden_state, supports):
+        seq_length = inputs.shape[0]
+        batch_size = inputs.shape[1]
+        # (seq_length, batch_size, num_nodes*input_dim)
+        inputs = torch.reshape(inputs, (seq_length, batch_size, -1))
+
+        current_inputs = inputs
+        # the output hidden states, shape (num_layers, batch, outdim)
+        output_hidden = []
+        for i_layer in range(self.num_rnn_layers):
+            hidden_state = initial_hidden_state[i_layer]
+            output_inner = []
+            for t in range(seq_length):
+                _, hidden_state = self.encoding_cells[i_layer](
+                    supports, current_inputs[t, ...], hidden_state)
+                output_inner.append(hidden_state)
+            output_hidden.append(hidden_state)
+            current_inputs = torch.stack(output_inner, dim=0).to(
+                self._device)  # (seq_len, batch_size, num_nodes * rnn_units)
+        output_hidden = torch.stack(output_hidden, dim=0).to(
+            self._device)  # (num_layers, batch_size, num_nodes * rnn_units)
+        return output_hidden, current_inputs
+
+    def init_hidden(self, batch_size):
+        init_states = []
+        for i in range(self.num_rnn_layers):
+            init_states.append(self.encoding_cells[i].init_hidden(batch_size))
+        # (num_layers, batch_size, num_nodes * rnn_units)
+        return torch.stack(init_states, dim=0)
+
+def last_relevant_pytorch(output, lengths, batch_first=True):
+    # Get the last output in 'output'.
+    lengths = lengths.cpu()
+
+    # masks of the true seq lengths
+    masks = (lengths - 1).view(-1, 1).expand(len(lengths), output.size(2))
+    time_dimension = 1 if batch_first else 0
+    masks = masks.unsqueeze(time_dimension)
+    masks = masks.to(output.device)
+    last_output = output.gather(time_dimension, masks).squeeze(time_dimension)
+    last_output.to(output.device)
+
+    return last_output
+
+class DCRNNModel_classification(nn.Module):
+    def __init__(self, num_nodes, num_rnn_layers, rnn_units, input_dim, num_classes, max_diffusion_step, dcgru_activation, filter_type, dropout, device=None):
+        super(DCRNNModel_classification, self).__init__()
+
+        self.num_nodes = num_nodes
+        self.num_rnn_layers = num_rnn_layers
+        self.rnn_units = rnn_units
+        self._device = device
+        self.num_classes = num_classes
+
+        self.encoder = DCRNNEncoder(input_dim=input_dim,
+                                    max_diffusion_step=max_diffusion_step,
+                                    hid_dim=rnn_units, num_nodes=num_nodes,
+                                    num_rnn_layers=num_rnn_layers,
+                                    dcgru_activation=dcgru_activation,
+                                    filter_type=filter_type)
+
+        self.fc = nn.Linear(rnn_units, num_classes)
+        self.dropout = nn.Dropout(dropout)
+        self.relu = nn.ReLU()
+
+    def forward(self, input_seq, seq_lengths, supports):
+        """
+        Args:
+            input_seq: input sequence, shape (batch, seq_len, num_nodes, input_dim)
+            seq_lengths: actual seq lengths w/o padding, shape (batch,)
+            supports: list of supports from laplacian or dual_random_walk filters
+        Returns:
+            pool_logits: logits from last FC layer (before sigmoid/softmax)
+        """
+        batch_size, max_seq_len = input_seq.shape[0], input_seq.shape[1]
+
+        # (max_seq_len, batch, num_nodes, input_dim)
+        input_seq = torch.transpose(input_seq, dim0=0, dim1=1)
+
+        # initialize the hidden state of the encoder
+        init_hidden_state = self.encoder.init_hidden(
+            batch_size).to(self._device) # (num_layers, batch, num_nodes * rnn_units)
+
+        # last hidden state of the encoder is the context
+        # (max_seq_len, batch, rnn_units*num_nodes)
+        _, final_hidden = self.encoder(input_seq, init_hidden_state, supports)
+        # (batch_size, max_seq_len, rnn_units*num_nodes)
+        output = torch.transpose(final_hidden, dim0=0, dim1=1)
+
+        # extract last relevant output
+        last_out = last_relevant_pytorch(
+            output, seq_lengths, batch_first=True)  # (batch_size, rnn_units*num_nodes)
+        # (batch_size, num_nodes, rnn_units)
+        last_out = last_out.view(batch_size, self.num_nodes, self.rnn_units)
+        last_out = last_out.to(self._device)
+
+        # final FC layer
+        logits = self.fc(self.relu(self.dropout(last_out)))
+
+        # max-pooling over nodes
+        pool_logits, _ = torch.max(logits, dim=1)  # (batch_size, num_classes)
+
+        return pool_logits
+
+
+
+# ---- GNN_LSTM -----
+
+from torch_geometric.utils import dense_to_sparse
+
+class GCN_LSTM_Model(nn.Module):
+    """
+    GCN (PyG) + LSTM model for graph-structured time series.
+
+    Steps to use adjacency matrix with GCNConv:
+    1. Convert dense adjacency `adj` ([num_nodes, num_nodes]) to sparse representation:
+       ```python
+       edge_index, edge_weight = dense_to_sparse(adj)
+       ```
+    2. Store `edge_index` and `edge_weight` as buffers in the model.
+    3. In `forward()`, pass node features and these buffers to `GCNConv`.
+    """
+    def __init__(
+        self,
+        num_nodes: int,
+        in_channels: int,
+        gcn_hidden: int,
+        lstm_hidden: int,
+        output_dim: int,
+        lstm_layers: int,
+        adj: torch.Tensor,
+        dropout: float,
+        seq_len: float
+    ):
+        super().__init__()
+        self.num_nodes = num_nodes
+        self.gcn_hidden = gcn_hidden
+
+        # Convert dense adjacency to sparse format
+        # adj: [num_nodes, num_nodes]
+        edge_index, edge_weight = dense_to_sparse(adj)
+        self.register_buffer('edge_index', edge_index)
+        self.register_buffer('edge_weight', edge_weight)
+
+        # GCNConv layer from PyTorch Geometric
+        # Create separate GCNConv for each time step
+        self.gcn_layers = nn.ModuleList([
+            GCNConv(in_channels, gcn_hidden) for _ in range(seq_len)
+        ])
+
+        # LSTM for temporal dependencies
+        self.lstm = nn.LSTM(
+            input_size=num_nodes * gcn_hidden,
+            hidden_size=lstm_hidden,
+            num_layers=lstm_layers,
+            batch_first=True,
+            dropout=dropout
+        )
+
+        # Final projection per time step
+        self.proj = nn.Linear(lstm_hidden, output_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: [batch_size, seq_len, num_nodes, in_channels]
+        returns: [batch_size, seq_len, output_dim]
+        """
+        batch_size, seq_len, num_nodes, in_channels = x.size()
+        assert num_nodes == self.num_nodes, (
+            f"Expected {self.num_nodes} nodes, got {num_nodes}"
+        )
+
+        gcn_seq = []
+        for t in range(seq_len):
+
+            x_t = x[:, t, :, :]
+            # Apply GCNConv with edge_index and edge_weight
+            gcn = self.gcn_layers[t]
+            h = gcn(
+                x_t,
+                self.edge_index,
+                edge_weight=self.edge_weight
+            )  # [batch_size * num_nodes, gcn_hidden]
+            h  = F.relu(h)
+            # Restore batch dimension and flatten node embeddings
+            h = h.reshape(batch_size, num_nodes * self.gcn_hidden)
+            gcn_seq.append(h)
+
+        # Stack along time dimension
+        gcn_seq = torch.stack(gcn_seq, dim=1)  # [batch_size, seq_len, num_nodes * gcn_hidden]
+
+        # Pass through LSTM
+        lstm_out, _ = self.lstm(gcn_seq)  # [batch_size, seq_len, lstm_hidden]
+
+        # Project to output
+        last_timestep = lstm_out[:, -1, :]  # [batch_size, hidden_dim]
+        logits = self.proj(last_timestep)  # [batch_size, output_dim]
+        return logits
+
+class GCN2_LSTM_Model(nn.Module):
+    """
+    GCN (PyG) + LSTM model for graph-structured time series.
+
+    Steps to use adjacency matrix with GCNConv:
+    1. Convert dense adjacency `adj` ([num_nodes, num_nodes]) to sparse representation:
+       ```python
+       edge_index, edge_weight = dense_to_sparse(adj)
+       ```
+    2. Store `edge_index` and `edge_weight` as buffers in the model.
+    3. In `forward()`, pass node features and these buffers to `GCNConv`.
+    """
+    def __init__(
+        self,
+        num_nodes: int,
+        in_channels: int,
+        gcn_hidden: int,
+        lstm_hidden: int,
+        output_dim: int,
+        lstm_layers: int,
+        adj: torch.Tensor,
+        dropout: float,
+        seq_len: float
+    ):
+        super().__init__()
+        self.num_nodes = num_nodes
+        self.gcn_hidden = gcn_hidden
+
+        # Convert dense adjacency to sparse format
+        # adj: [num_nodes, num_nodes]
+        edge_index, edge_weight = dense_to_sparse(adj)
+        self.register_buffer('edge_index', edge_index)
+        self.register_buffer('edge_weight', edge_weight)
+
+        # GCNConv layer from PyTorch Geometric
+        # Create separate GCNConv for each time step -> Layer 1
+        self.gcn_layers1 = nn.ModuleList([
+            GCNConv(in_channels, gcn_hidden) for _ in range(seq_len)
+        ])
+        # Create separate GCNConv for each time step -> Layer 2
+        self.gcn_layers2 = nn.ModuleList([
+            GCNConv(gcn_hidden, gcn_hidden) for _ in range(seq_len)
+        ])
+
+        # Normalize the graph output
+        self.norm1 = GraphNorm(gcn_hidden)
+        self.norm2 = GraphNorm(gcn_hidden)
+
+        # LSTM for temporal dependencies
+        self.lstm = nn.LSTM(
+            input_size=num_nodes * gcn_hidden,
+            hidden_size=lstm_hidden,
+            num_layers=lstm_layers,
+            batch_first=True,
+            dropout=dropout
+        )
+
+        # Final projection per time step
+        self.proj = nn.Linear(lstm_hidden, output_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: [batch_size, seq_len, num_nodes, in_channels]
+        returns: [batch_size, seq_len, output_dim]
+        """
+        batch_size, seq_len, num_nodes, in_channels = x.size()
+        assert num_nodes == self.num_nodes, (
+            f"Expected {self.num_nodes} nodes, got {num_nodes}"
+        )
+
+        gcn_seq = []
+        for t in range(seq_len):
+
+            x_t = x[:, t, :, :]
+            # Apply GCNConv with edge_index and edge_weight
+            gcn1 = self.gcn_layers1[t]
+            gcn2 = self.gcn_layers2[t]
+
+            x_input = x_t
+            h = gcn1(
+                x_t,
+                self.edge_index,
+                edge_weight=self.edge_weight
+            )  # [batch_size * num_nodes, gcn_hidden]
+            h = self.norm1(h) # [batch_size * num_nodes, gcn_hidden]
+            # Skip connection
+            h = F.relu(h + x_input)
+
+            x_input2 = h
+            h2 = gcn2(
+                h,
+                self.edge_index,
+                edge_weight=self.edge_weight
+            )  # [batch_size * num_nodes, gcn_hidden]
+            h2 = self.norm2(h2) # [batch_size * num_nodes, gcn_hidden]
+            # Skip connection
+            h = F.relu(h2 + x_input2)
+
+            # Restore batch dimension and flatten node embeddings
+            h = h.reshape(batch_size, num_nodes * self.gcn_hidden)
+            gcn_seq.append(h)
+
+        # Stack along time dimension
+        gcn_seq = torch.stack(gcn_seq, dim=1)  # [batch_size, seq_len, num_nodes * gcn_hidden]
+
+        # Pass through LSTM
+        lstm_out, _ = self.lstm(gcn_seq)  # [batch_size, seq_len, lstm_hidden]
+
+        # Project to output
+        last_timestep = lstm_out[:, -1, :]  # [batch_size, hidden_dim]
+        logits = self.proj(last_timestep)  # [batch_size, output_dim]
+        return logits
+
+
+class GAT_LSTM_Model(nn.Module):
+    """
+    GAT (PyG) + LSTM model for graph-structured time series.
+
+    Steps to use adjacency matrix with GATConv:
+    1. Convert dense adjacency `adj` ([num_nodes, num_nodes]) to sparse representation:
+       ```python
+       edge_index, edge_weight = dense_to_sparse(adj)
+       ```
+    2. Store `edge_index` and `edge_weight` as buffers in the model.
+    3. In `forward()`, pass node features and these buffers to `GATConv`.
+    """
+    def __init__(
+        self,
+        num_nodes: int,
+        in_channels: int,
+        gat_hidden: int,
+        lstm_hidden: int,
+        output_dim: int,
+        lstm_layers: int,
+        num_heads: int,
+        dropout: float,
+        seq_len: float,
+        adj: torch.Tensor,
+    ):
+        super().__init__()
+        self.num_nodes = num_nodes
+        self.gat_hidden = gat_hidden
+        self.num_heads = num_heads
+
+        # Convert dense adjacency to sparse format
+        # adj: [num_nodes, num_nodes]
+        edge_index, edge_weight = dense_to_sparse(adj)
+        self.register_buffer('edge_index', edge_index)
+        self.register_buffer('edge_weight', edge_weight)
+
+        # GATConv layer from PyTorch Geometric
+        # Create separate GATConv for each time step
+        self.gat_layers = nn.ModuleList([
+            GATConv(in_channels, gat_hidden, heads = num_heads) for _ in range(seq_len)
+        ])
+
+        # Linear layer to project [gat_hidden * num_heads] to [gat_hidden]
+        self.projector = nn.Linear(num_nodes * gat_hidden * num_heads, num_nodes * gat_hidden)
+
+        # LSTM for temporal dependencies
+        self.lstm = nn.LSTM(
+            input_size=num_nodes * gat_hidden,
+            hidden_size=lstm_hidden,
+            num_layers=lstm_layers,
+            batch_first=True,
+            dropout=dropout
+        )
+
+        # Final projection per time step
+        self.proj = nn.Linear(lstm_hidden, output_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: [batch_size, seq_len, num_nodes, in_channels]
+        returns: [batch_size, seq_len, output_dim]
+        """
+        batch_size, seq_len, num_nodes, in_channels = x.size()
+        assert num_nodes == self.num_nodes, (
+            f"Expected {self.num_nodes} nodes, got {num_nodes}"
+        )
+
+        gat_seq = []
+        for t in range(seq_len):
+
+            # Create batches.
+            graphs = []
+            for i in range(batch_size):
+                graphs.append(Data(
+                x=x[i, t, :, :], 
+                edge_index=self.edge_index.clone(), 
+            ))
+            batch_graph = Batch.from_data_list(graphs)
+
+            # Apply GATConv with edge_index.
+            gat = self.gat_layers[t]
+            h = gat(
+                batch_graph.x,
+                batch_graph.edge_index,
+            )  # [batch_size * num_nodes, gat_hidden * num_heads]
+            h  = F.relu(h)
+            # Restore batch dimension and flatten node embeddings
+            h = h.reshape(batch_size, num_nodes * self.gat_hidden * self.num_heads)
+            gat_seq.append(h)
+
+        # Stack along time dimension
+        gat_seq = torch.stack(gat_seq, dim=1)  # [batch_size, seq_len, num_nodes * gat_hidden * num_heads]
+
+        # Make it compatible with LSTM
+        gat_seq = self.projector(gat_seq) # [batch_size, seq_len, num_nodes * gat_hidden]
+        gat_seq  = F.relu(gat_seq)
+
+        # Pass through LSTM
+        lstm_out, _ = self.lstm(gat_seq)  # [batch_size, seq_len, lstm_hidden]
+
+        # Project to output
+        last_timestep = lstm_out[:, -1, :]  # [batch_size, hidden_dim]
+        logits = self.proj(last_timestep)  # [batch_size, output_dim]
+        return logits
+
+class GAT2_LSTM_Model(nn.Module):
+    """
+    GAT (PyG) + LSTM model for graph-structured time series.
+
+    Steps to use adjacency matrix with GATConv:
+    1. Convert dense adjacency `adj` ([num_nodes, num_nodes]) to sparse representation:
+       ```python
+       edge_index, edge_weight = dense_to_sparse(adj)
+       ```
+    2. Store `edge_index` and `edge_weight` as buffers in the model.
+    3. In `forward()`, pass node features and these buffers to `GATConv`.
+    """
+    def __init__(
+        self,
+        num_nodes: int,
+        in_channels: int,
+        gat_hidden: int,
+        lstm_hidden: int,
+        output_dim: int,
+        lstm_layers: int,
+        num_heads: int,
+        dropout: float,
+        seq_len: float,
+        adj: torch.Tensor,
+    ):
+        super().__init__()
+        self.num_nodes = num_nodes
+        self.gat_hidden = gat_hidden
+        self.num_heads = num_heads
+
+        # Convert dense adjacency to sparse format
+        # adj: [num_nodes, num_nodes]
+        edge_index, edge_weight = dense_to_sparse(adj)
+        self.register_buffer('edge_index', edge_index)
+        self.register_buffer('edge_weight', edge_weight)
+
+        # GATConv layer from PyTorch Geometric
+        # Create separate GATConv for each time step -> Layer 1
+        self.gat_layers1 = nn.ModuleList([
+            GATConv(in_channels, int(gat_hidden/num_heads), heads = num_heads) for _ in range(seq_len)
+        ])
+
+        # Normalize the graph output
+        self.norm1 = GraphNorm(gat_hidden)
+
+        # Create separate GATConv for each time step -> Layer 2
+        self.gat_layers2 = nn.ModuleList([
+            GATConv(gat_hidden, gat_hidden, heads = num_heads) for _ in range(seq_len)
+        ])
+
+        # Normalize the graph output
+        self.norm2 = GraphNorm(gat_hidden * num_heads)
+
+        # Linear layer to project [gat_hidden * num_heads] to [gat_hidden]
+        self.projector = nn.Linear(num_nodes * gat_hidden * num_heads, num_nodes * gat_hidden)
+
+        # LSTM for temporal dependencies
+        self.lstm = nn.LSTM(
+            input_size=num_nodes * gat_hidden,
+            hidden_size=lstm_hidden,
+            num_layers=lstm_layers,
+            batch_first=True,
+            dropout=dropout
+        )
+
+        # Final projection per time step
+        self.proj = nn.Linear(lstm_hidden, output_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: [batch_size, seq_len, num_nodes, in_channels]
+        returns: [batch_size, seq_len, output_dim]
+        """
+        batch_size, seq_len, num_nodes, in_channels = x.size()
+        assert num_nodes == self.num_nodes, (
+            f"Expected {self.num_nodes} nodes, got {num_nodes}"
+        )
+
+        gat_seq = []
+        for t in range(seq_len):
+
+            # Create batches.
+            graphs = []
+            for i in range(batch_size):
+                graphs.append(Data(
+                x=x[i, t, :, :], 
+                edge_index=self.edge_index.clone(), 
+            ))
+            batch_graph = Batch.from_data_list(graphs)
+
+            # Apply GATConv with edge_index
+            gat1 = self.gat_layers1[t]
+            gat2 = self.gat_layers2[t]
+
+            x_input = batch_graph.x
+            h = gat1(
+                batch_graph.x,
+                batch_graph.edge_index,
+            )  # [batch_size * num_nodes, gat_hidden]
+            h = self.norm1(h, batch_graph.batch)
+            # Skip connection
+            h = F.relu(h + x_input)
+            
+            x_input = h
+            h = gat2(
+                h,
+                batch_graph.edge_index,
+            )  # [batch_size * num_nodes, gat_hidden * num_heads]
+            h = self.norm2(h, batch_graph.batch)
+
+            # Restore batch dimension and flatten node embeddings
+            h = h.reshape(batch_size, num_nodes * self.gat_hidden * self.num_heads)
+            gat_seq.append(h)
+
+        # Stack along time dimension
+        gat_seq = torch.stack(gat_seq, dim=1)  # [batch_size, seq_len, num_nodes * gat_hidden * num_heads]
+
+        # Make it compatible with LSTM
+        gat_seq = self.projector(gat_seq) # [batch_size, seq_len, num_nodes * gat_hidden]
+        gat_seq  = F.relu(gat_seq)
+
+        # Pass through LSTM
+        lstm_out, _ = self.lstm(gat_seq)  # [batch_size, seq_len, lstm_hidden]
+
+        # Project to output
+        last_timestep = lstm_out[:, -1, :]  # [batch_size, hidden_dim]
+        logits = self.proj(last_timestep)  # [batch_size, output_dim]
+        return logits
