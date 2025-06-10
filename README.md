@@ -4,7 +4,7 @@ This is the code for the course project in EE-452 (Network Machine Learning).
 
 ## Installation instructions
 
-Use the requirements.txt to install all the packages.
+First create an environment with python 3.11.12
 
 ```bash
 bash install.sh
