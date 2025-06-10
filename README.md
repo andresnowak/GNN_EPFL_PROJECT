@@ -7,7 +7,7 @@ This is the code for the course project in EE-452 (Network Machine Learning).
 Use the requirements.txt to install all the packages.
 
 ```bash
-pip install -r requirements.txt
+bash install.sh
 ```
 
 ## Structure of the repo
@@ -22,6 +22,11 @@ This repo contains these models:
 *   LSTM
 *   GAT
 *   CNN_GAT
+*   STGCN avg pooling
+*   STGCN attn pooling
+*   Resnet lstm
+*   DTGCN
+*   TGCN
 
 ## Inference
 
