@@ -70,7 +70,7 @@ seed_everything(1)
 
 
 def main(config: dict):
-    config["data_path"] = parent_dir.parent / "data"
+    config["data_path"] = parent_dir / "data"
 
     dataset_tr, dataset_val, train_df = load_eeg_data(config["data_path"], config["train_parquet_file"], config["val_parquet_file"], config["signal_processing"]["filtering_type"], robust=config["val_robust"])
 
