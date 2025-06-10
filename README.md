@@ -4,7 +4,7 @@ This is the code for the course project in EE-452 (Network Machine Learning).
 
 ## Installation instructions
 
-First create an environment with python 3.11.12
+First create a conda environment with python 3.11.12.
 
 ```bash
 bash install.sh
@@ -22,9 +22,9 @@ This repo contains these models:
 *   LSTM
 *   GAT
 *   CNN + GAT
-*   STGCN avg pooling
-*   STGCN attn pooling
-*   Resnet lstm
+*   STGCN Avg Pooling
+*   STGCN Attention Pooling
+*   Resnet LSTM
 *   DTGCN
 *   TGCN
 

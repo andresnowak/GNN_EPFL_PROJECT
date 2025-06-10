@@ -15,13 +15,13 @@ import argparse
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-parser = argparse.ArgumentParser(description="Run inference on the LSTM-GCN model.")
+parser = argparse.ArgumentParser(description="Run inference on the S4 model.")
 parser.add_argument('--model', type=str, required=True, help='Model path')
 args = parser.parse_args()
 model_path = args.model
 
 DATA_ROOT_TEST = Path(os.path.join(script_dir, "..", "data", "test"))
-clips_te = pd.read_parquet(DATA_ROOT_TEST / "test/segments.parquet")
+clips_te = pd.read_parquet(DATA_ROOT_TEST / "segments.parquet")
 
 bp_filter = signal.butter(4, (0.5, 30), btype="bandpass", output="sos", fs=250)
 
@@ -39,7 +39,7 @@ def fft_filtering(x: np.ndarray) -> np.ndarray:
 # Create test dataset
 dataset_te = EEGDataset(
     clips_te,
-    signals_root=DATA_ROOT_TEST / "test",
+    signals_root=DATA_ROOT_TEST,
     signal_transform=fft_filtering,
     prefetch=True,
     return_id=True

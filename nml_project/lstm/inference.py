@@ -41,7 +41,7 @@ def fft_filtering(x: np.ndarray) -> np.ndarray:
 # Create test dataset
 dataset_te = EEGDataset(
     clips_te,
-    signals_root=DATA_ROOT_TEST / "test",
+    signals_root=DATA_ROOT_TEST,
     signal_transform=fft_filtering,
     prefetch=True,
     return_id=True,

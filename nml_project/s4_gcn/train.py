@@ -53,14 +53,14 @@ def fft_filtering(x: np.ndarray) -> np.ndarray:
 # Create training and validation datasets
 dataset_tr = EEGDataset(
     clips_tr,
-    signals_root=DATA_ROOT/"data"/"train"/"train",
+    signals_root=DATA_ROOT/"data"/"train",
     signal_transform=time_filtering,
     prefetch=True,
 )
 
 dataset_val = EEGDataset(
     clips_va,
-    signals_root=DATA_ROOT/"data"/"train"/"train",
+    signals_root=DATA_ROOT/"data"/"train",
     signal_transform=time_filtering,
     prefetch=True,
 )
