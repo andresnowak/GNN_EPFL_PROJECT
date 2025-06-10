@@ -319,7 +319,7 @@ for epoch in range(epochs):
 if log_wandb:
     torch.save(model.state_dict(), os.path.join(wandb.run.dir, "final_lstm_gat_model.pth"))
 else:
-    torch.save(model.state_dict(), os.path.join(script_dir, "final_lstm_gat_model.pth")
+    torch.save(model.state_dict(), os.path.join(script_dir, "final_lstm_gat_model.pth"))
 print("Training complete. Final model saved.")
 
 if log_wandb:
